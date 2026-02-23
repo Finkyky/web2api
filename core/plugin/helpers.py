@@ -1,0 +1,300 @@
+"""
+插件通用能力：页面复用、Cookie 登录、在浏览器内发起 fetch 并流式回传。
+接入方只需实现站点特有的 URL/请求体/SSE 解析，其余复用此处逻辑。
+"""
+
+import asyncio
+import logging
+from collections.abc import Callable
+from typing import Any, AsyncIterator
+
+from playwright.async_api import BrowserContext, Page
+
+ParseSseEvent = Callable[[str], tuple[list[str], str | None, str | None]]
+
+logger = logging.getLogger(__name__)
+
+# 在页面内 POST 请求并流式回传：成功时逐块发送响应体，失败时发送 __error__: 前缀 + 信息，最后发送 __done__
+# bindingName 按请求唯一，同一 page 多并发时互不串数据
+PAGE_FETCH_STREAM_JS = """
+async ({ url, body, bindingName }) => {
+  const send = globalThis[bindingName];
+  const done = "__done__";
+  const errPrefix = "__error__:";
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 90000);
+    const resp = await fetch(url, {
+      method: "POST",
+      body: body,
+      headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
+      credentials: "include",
+      signal: ctrl.signal
+    });
+    clearTimeout(t);
+    if (!resp.ok) {
+      const errText = await resp.text();
+      const errSnippet = (errText && errText.length > 800) ? errText.slice(0, 800) + "..." : (errText || "");
+      await send(errPrefix + "HTTP " + resp.status + " " + errSnippet);
+      await send(done);
+      return;
+    }
+    if (!resp.body) {
+      await send(errPrefix + "No response body");
+      await send(done);
+      return;
+    }
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    while (true) {
+      const { done: streamDone, value } = await reader.read();
+      if (streamDone) break;
+      await send(dec.decode(value));
+    }
+  } catch (e) {
+    const msg = e.name === "AbortError" ? "请求超时(90s)" : (e.message || String(e));
+    await send(errPrefix + msg);
+  }
+  await send(done);
+}
+"""
+
+
+async def ensure_page_for_site(
+    context: BrowserContext,
+    url_contains: str,
+    start_url: str,
+    *,
+    timeout: int = 20000,
+) -> Page:
+    """
+    若已有页面 URL 包含 url_contains 则复用，否则 new_page 并 goto start_url。
+    接入方只需提供「站点特征」和「入口 URL」。
+    """
+    if context.pages:
+        for p in context.pages:
+            if url_contains in (p.url or ""):
+                return p
+    page = await context.new_page()
+    await page.goto(start_url, wait_until="domcontentloaded", timeout=timeout)
+    return page
+
+
+async def create_page_for_site(
+    context: BrowserContext,
+    start_url: str,
+    *,
+    timeout: int = 20000,
+) -> Page:
+    """
+    总是新建一个 page 并 goto start_url，用于 page 池的初始化与补回。
+    """
+    page = await context.new_page()
+    await page.goto(start_url, wait_until="domcontentloaded", timeout=timeout)
+    return page
+
+
+async def apply_cookie_auth(
+    context: BrowserContext,
+    page: Page,
+    auth: dict[str, Any],
+    cookie_name: str,
+    auth_keys: list[str],
+    domain: str,
+    *,
+    path: str = "/",
+    reload: bool = True,
+) -> None:
+    """
+    从 auth 中按 auth_keys 顺序取第一个非空值作为 cookie 值，写入 context 并可选 reload。
+    接入方只需提供 cookie 名、auth 里的 key 列表、域名。
+    仅写 cookie 不 reload 时，同 context 内的 fetch() 仍会带上 cookie；reload 仅在需要页面文档同步登录态时用。
+    """
+    value = None
+    for k in auth_keys:
+        v = auth.get(k)
+        if v is not None and v != "":
+            value = str(v).strip()
+            if value:
+                break
+    if not value:
+        raise ValueError(f"auth 需包含以下其一且非空: {auth_keys}")
+    logger.info(
+        "[auth] context.add_cookies domain=%s name=%s reload=%s page.url=%s",
+        domain,
+        cookie_name,
+        reload,
+        page.url,
+    )
+    await context.add_cookies(
+        [
+            {
+                "name": cookie_name,
+                "value": value,
+                "domain": domain,
+                "path": path,
+                "secure": True,
+                "httpOnly": True,
+            }
+        ]
+    )
+    if reload:
+        try:
+            await page.reload(wait_until="domcontentloaded")
+        except Exception as e:
+            err_msg = str(e)
+            if "ERR_ABORTED" in err_msg or "detached" in err_msg.lower():
+                logger.warning(
+                    "[auth] page.reload 被中止或 frame 已分离，跳过（cookie 已写入 context）: %s",
+                    err_msg[:200],
+                )
+            else:
+                raise
+
+
+async def stream_raw_via_page_fetch(
+    context: BrowserContext,
+    page: Page,
+    url: str,
+    body: str,
+    request_id: str,
+    chat_page_url: str | None = None,
+    *,
+    on_http_error: Callable[[str], None] | None = None,
+    fetch_timeout: int = 90,
+    read_timeout: float = 130.0,
+) -> AsyncIterator[str]:
+    """
+    在浏览器内对 url 发起 POST body，流式回传原始字符串块（含 SSE 等）。
+    同一 page 多请求用 request_id 区分 binding，互不串数据。
+    通过 CDP Runtime.addBinding 注入 sendChunk_<request_id>，用 Runtime.bindingCalled 接收。
+    收到 __error__: 时调用 on_http_error(msg)；收到 __done__ 结束。
+    """
+    chunk_queue: asyncio.Queue[str] = asyncio.Queue()
+    BINDING_NAME = "sendChunk_" + request_id
+
+    def on_binding_called(event: dict[str, Any]) -> None:
+        name = event.get("name")
+        payload = event.get("payload", "")
+        if name == BINDING_NAME:
+            chunk_queue.put_nowait(
+                payload if isinstance(payload, str) else str(payload)
+            )
+
+    cdp = None
+    try:
+        cdp = await context.new_cdp_session(page)
+        cdp.on("Runtime.bindingCalled", on_binding_called)
+        await cdp.send("Runtime.addBinding", {"name": BINDING_NAME})
+
+        logger.info(
+            "[fetch] evaluate fetch on pool page (no goto) url=%s page.url=%s",
+            url[:80] + "..." if len(url) > 80 else url,
+            page.url or "",
+        )
+
+        async def run_fetch() -> None:
+            await page.evaluate(
+                PAGE_FETCH_STREAM_JS,
+                {"url": url, "body": body, "bindingName": BINDING_NAME},
+            )
+
+        fetch_task = asyncio.create_task(run_fetch())
+        try:
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(
+                        chunk_queue.get(), timeout=read_timeout
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning("流式读取超时")
+                    break
+                if chunk == "__done__":
+                    break
+                if chunk.startswith("__error__:"):
+                    msg = chunk[10:].strip()
+                    logger.warning("[fetch] __error__ from page: %s", msg)
+                    if on_http_error:
+                        on_http_error(msg)
+                    else:
+                        raise RuntimeError(msg)
+                    continue
+                yield chunk
+        finally:
+            try:
+                await asyncio.wait_for(fetch_task, timeout=5.0)
+            except asyncio.TimeoutError:
+                fetch_task.cancel()
+                try:
+                    await fetch_task
+                except asyncio.CancelledError:
+                    pass
+    finally:
+        if cdp is not None:
+            try:
+                await cdp.detach()
+            except Exception as e:
+                logger.debug("detach CDP session 时异常: %s", e)
+
+
+def parse_sse_to_events(buffer: str, chunk: str) -> tuple[str, list[str]]:
+    """
+    把 chunk 追加到 buffer，按行拆出 data: 后的 payload 列表，返回 (剩余 buffer, payload 列表)。
+    接入方对每个 payload 自行 JSON 解析并抽取 text / message_id / error。
+    """
+    buffer += chunk
+    lines = buffer.split("\n")
+    buffer = lines[-1]
+    payloads: list[str] = []
+    for line in lines[:-1]:
+        line = line.strip()
+        if not line.startswith("data: "):
+            continue
+        payload = line[6:].strip()
+        if payload == "[DONE]" or not payload:
+            continue
+        payloads.append(payload)
+    return (buffer, payloads)
+
+
+async def stream_completion_via_sse(
+    context: BrowserContext,
+    page: Page,
+    url: str,
+    body: str,
+    parse_event: ParseSseEvent,
+    request_id: str,
+    *,
+    chat_page_url: str | None = None,
+    on_http_error: Callable[[str], None] | None = None,
+    collect_message_id: list[str] | None = None,
+) -> AsyncIterator[str]:
+    """
+    在浏览器内 POST 拿到流，按 SSE 行拆成 data 事件，用 parse_event(payload) 解析每条；
+    逐块 yield 文本，可选把 message_id 收集到 collect_message_id。
+    parse_event(payload) 返回 (texts, message_id, error)，error 非空时仅打 debug 日志不抛错。
+    """
+    buffer = ""
+    async for chunk in stream_raw_via_page_fetch(
+        context,
+        page,
+        url,
+        body,
+        request_id,
+        chat_page_url=chat_page_url,
+        on_http_error=on_http_error,
+    ):
+        buffer, payloads = parse_sse_to_events(buffer, chunk)
+        for payload in payloads:
+            try:
+                texts, message_id, error = parse_event(payload)
+            except Exception as e:
+                logger.debug("parse_sse_event 单条解析异常: %s", e)
+                continue
+            if error:
+                logger.debug("SSE error: %s", error)
+                continue
+            if message_id and collect_message_id is not None:
+                collect_message_id.append(message_id)
+            for t in texts:
+                yield t

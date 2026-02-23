@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>v2 账号池配置</title>
+    <style>
+      :root {
+        --bg: #0f0f12;
+        --surface: #18181c;
+        --border: #2a2a30;
+        --text: #e4e4e7;
+        --text-muted: #71717a;
+        --accent: #3b82f6;
+        --accent-hover: #2563eb;
+        --danger: #ef4444;
+        --danger-hover: #dc2626;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        margin: 0;
+        padding: 24px;
+        line-height: 1.5;
+      }
+      h1 {
+        font-size: 1.5rem;
+        margin: 0 0 24px;
+      }
+      .toolbar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+      .btn {
+        padding: 8px 16px;
+        border-radius: 8px;
+        border: none;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 500;
+      }
+      .btn-primary {
+        background: var(--accent);
+        color: #fff;
+      }
+      .btn-primary:hover {
+        background: var(--accent-hover);
+      }
+      .btn-ghost {
+        background: var(--surface);
+        color: var(--text);
+        border: 1px solid var(--border);
+      }
+      .btn-ghost:hover {
+        background: var(--border);
+      }
+      .btn-danger {
+        background: var(--danger);
+        color: #fff;
+      }
+      .btn-danger:hover {
+        background: var(--danger-hover);
+      }
+      .msg {
+        position: fixed;
+        top: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 1000;
+        padding: 12px 14px;
+        border-radius: 8px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+        max-width: 360px;
+        display: none;
+      }
+      .msg.success {
+        background: #14532d;
+        color: #bbf7d0;
+      }
+      .msg.error {
+        background: #7f1d1d;
+        color: #fecaca;
+      }
+      .group {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 16px;
+      }
+      .group h2 {
+        font-size: 1rem;
+        margin: 0;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 40px;
+        line-height: 1;
+        padding: 2px 0;
+      }
+      .group h2 .label {
+        color: var(--text-muted);
+        font-weight: 600;
+      }
+      .row {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+      .row.proxy-one-row {
+        grid-template-columns: 1fr 2fr 1fr 1fr 1fr;
+        gap: 10px;
+      }
+      @media (max-width: 900px) {
+        .row.proxy-one-row {
+          grid-template-columns: 1fr 1fr 1fr;
+        }
+      }
+      label {
+        display: block;
+        font-size: 12px;
+        color: var(--text-muted);
+        margin-bottom: 4px;
+      }
+      input,
+      textarea,
+      select {
+        width: 100%;
+        padding: 8px 12px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: var(--bg);
+        color: var(--text);
+        font-size: 14px;
+      }
+      textarea {
+        resize: vertical;
+        min-height: 56px;
+        font-family: ui-monospace, monospace;
+      }
+      input:focus,
+      textarea:focus,
+      select:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+      .accounts {
+        margin-top: 16px;
+        padding-top: 16px;
+        border-top: 1px solid var(--border);
+      }
+      .accounts h3 {
+        font-size: 14px;
+        margin: 0 0 12px;
+        color: var(--text-muted);
+      }
+      .account {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .account .account-row1 {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        align-items: flex-end;
+      }
+      .account .account-row1 .f {
+        min-width: 120px;
+      }
+      .account .account-row1 .f.name {
+        max-width: 160px;
+        min-width: 100px;
+      }
+      .account .account-row1 .f.type {
+        min-width: 120px;
+      }
+      .account .account-row2 {
+        width: 100%;
+      }
+      .account .account-row2 .f {
+        width: 100%;
+      }
+      .account .f label {
+        margin-bottom: 2px;
+      }
+      .account .f input,
+      .account .f textarea,
+      .account .f select {
+        padding: 6px 10px;
+        font-size: 13px;
+      }
+      .account .actions {
+        flex-shrink: 0;
+      }
+      .search-row {
+        margin-bottom: 16px;
+      }
+      .search-row input {
+        max-width: 320px;
+      }
+      .stats {
+        font-size: 13px;
+        color: var(--text-muted);
+        margin-bottom: 16px;
+      }
+      .group-header {
+        cursor: pointer;
+        user-select: none;
+      }
+      .group-header:hover {
+        color: var(--accent);
+      }
+      .group-header .chevron {
+        display: inline-flex;
+        align-items: center;
+        margin-right: 8px;
+        transition: transform 0.2s;
+      }
+      .group-header.collapsed .chevron {
+        transform: rotate(-90deg);
+      }
+      .group.collapsed .group-body {
+        display: none;
+      }
+      .group.collapsed .accounts {
+        display: none;
+      }
+      .btn-sm {
+        padding: 6px 12px;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>v2 账号池配置</h1>
+    <div id="msg"></div>
+    <div class="toolbar">
+      <button type="button" class="btn btn-primary" id="addGroup">添加代理组</button>
+      <button type="button" class="btn btn-ghost" id="load">重新加载</button>
+      <button type="button" class="btn btn-primary" id="save">保存配置</button>
+    </div>
+    <div class="search-row">
+      <label>搜索（代理 host/user 或账号 name / type）</label>
+      <input type="text" id="search" placeholder="输入关键词筛选..." />
+    </div>
+    <div class="stats" id="stats"></div>
+    <div id="list"></div>
+
+    <script>
+      const API = '/api/v2/config'
+      const TYPES_API = '/api/v2/types'
+      let registeredTypes = ['claude']
+
+      async function loadTypes() {
+        try {
+          const res = await fetch(TYPES_API)
+          if (res.ok) {
+            const list = await res.json()
+            if (Array.isArray(list) && list.length) registeredTypes = list
+          }
+        } catch (_) {}
+      }
+
+      function showMsg(text, type = 'success') {
+        const el = document.getElementById('msg')
+        el.className = 'msg ' + type
+        el.textContent = text
+        el.style.display = 'block'
+        setTimeout(() => {
+          el.style.display = 'none'
+        }, 4000)
+      }
+
+      async function loadConfig() {
+        const res = await fetch(API)
+        if (!res.ok) throw new Error(await res.text())
+        return res.json()
+      }
+
+      function escapeAttr(s) {
+        if (s == null) return ''
+        return String(s)
+          .replace(/&/g, '&amp;')
+          .replace(/"/g, '&quot;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+      }
+
+      function authToStr(auth) {
+        if (auth == null || typeof auth !== 'object') return '{}'
+        try {
+          return JSON.stringify(auth, null, 2)
+        } catch {
+          return '{}'
+        }
+      }
+
+      function parseAuth(s) {
+        if (typeof s !== 'string' || !s.trim()) return {}
+        try {
+          const o = JSON.parse(s)
+          return typeof o === 'object' && o !== null ? o : {}
+        } catch {
+          return {}
+        }
+      }
+
+      function renderAccount(acc, accIndex, group, onRemove, onChange) {
+        const currentType = acc.type || 'claude'
+        const typeOptions = registeredTypes.includes(currentType)
+          ? registeredTypes
+          : [currentType].concat(registeredTypes)
+        const selectOpts = typeOptions
+          .map(
+            (t) =>
+              `<option value="${escapeAttr(t)}" ${t === currentType ? 'selected' : ''}>${escapeAttr(
+                t
+              )}</option>`
+          )
+          .join('')
+        const div = document.createElement('div')
+        div.className = 'account'
+        div.innerHTML = `
+          <div class="account-row1">
+            <div class="f name"><label>name</label><input type="text" data-k="name" value="${escapeAttr(
+              acc.name
+            )}" placeholder="claude-01" /></div>
+            <div class="f type"><label>type</label><select data-k="type">${selectOpts}</select></div>
+            <div class="actions"><button type="button" class="btn btn-danger btn-sm">删除</button></div>
+          </div>
+          <div class="account-row2">
+            <div class="f"><label>auth (JSON)</label><textarea data-k="auth" placeholder='{"sessionKey": "..."}' rows="2">${escapeAttr(
+              authToStr(acc.auth)
+            )}</textarea></div>
+          </div>
+        `
+        div.querySelector('[data-k="name"]').oninput = (e) =>
+          onChange(accIndex, 'name', e.target.value)
+        div.querySelector('[data-k="type"]').onchange = (e) =>
+          onChange(accIndex, 'type', e.target.value)
+        div.querySelector('[data-k="auth"]').oninput = (e) =>
+          onChange(accIndex, 'auth', e.target.value)
+        div.querySelector('.btn-danger').onclick = () => onRemove(accIndex)
+        return div
+      }
+
+      const PAGE_SIZE_OPTIONS = [10, 20, 50, 100]
+      const DEFAULT_PAGE_SIZE = 20
+      let groupCollapsed = {}
+      let groupPage = {}
+      let groupPageSize = {}
+
+      function groupKey(group, index) {
+        const h = (group.proxy_host || '').trim()
+        const u = (group.proxy_user || '').trim()
+        return h || u ? `${h}|${u}` : `idx-${index}`
+      }
+
+      function filterConfig(cfg, search) {
+        const q = (search || '').trim().toLowerCase()
+        if (!q) return cfg.map((g, i) => ({ group: g, groupIndex: i, accountIndices: null }))
+        const result = []
+        cfg.forEach((g, gi) => {
+          const matchHost = (g.proxy_host || '').toLowerCase().includes(q)
+          const matchUser = (g.proxy_user || '').toLowerCase().includes(q)
+          const allAccounts = g.accounts || []
+          const accountIndices = allAccounts
+            .map((_, i) => i)
+            .filter((i) => {
+              const a = allAccounts[i]
+              return (
+                (a.name || '').toLowerCase().includes(q) || (a.type || '').toLowerCase().includes(q)
+              )
+            })
+          if (matchHost || matchUser || accountIndices.length > 0) {
+            result.push({
+              group: g,
+              groupIndex: gi,
+              accountIndices: accountIndices.length ? accountIndices : null,
+            })
+          }
+        })
+        return result
+      }
+
+      function renderGroup(
+        group,
+        groupIndex,
+        config,
+        onRemoveGroup,
+        onAddAccount,
+        onRemoveAccount,
+        onAccountChange,
+        onGroupChange,
+        opts
+      ) {
+        const key = (k, def = '') => (group[k] != null && group[k] !== '' ? group[k] : def)
+        const gkey = groupKey(group, groupIndex)
+        const allAccounts = group.accounts || []
+        const indices = opts.accountIndices || allAccounts.map((_, i) => i)
+        const totalCount = indices.length
+        const isCollapsed = groupCollapsed[gkey] === true
+        const pageSize = groupPageSize[gkey] || DEFAULT_PAGE_SIZE
+        const totalPages = Math.max(1, Math.ceil(totalCount / pageSize))
+        const currentPage = Math.min(groupPage[gkey] || 0, totalPages - 1)
+        const start = currentPage * pageSize
+        const pageIndices = indices.slice(start, start + pageSize)
+        const pageAccounts = pageIndices.map((i) => allAccounts[i])
+
+        const div = document.createElement('div')
+        div.className = 'group' + (isCollapsed ? ' collapsed' : '')
+        div.dataset.groupIndex = String(groupIndex)
+        div.innerHTML = `
+          <h2 class="group-header ${isCollapsed ? 'collapsed' : ''}" data-action="toggle">
+            <span>
+              <span class="chevron">▼</span>
+              <span class="label">代理组 ${groupIndex + 1}</span>
+              <span class="label" style="margin-left:8px;font-weight:400">${
+                group.proxy_host || '—'
+              } · ${allAccounts.length} 个账号</span>
+            </span>
+            <span onclick="event.stopPropagation()">
+              <button type="button" class="btn btn-ghost btn-sm" data-action="add-account">添加账号</button>
+              <button type="button" class="btn btn-danger btn-sm" data-action="remove-group">删除本组</button>
+            </span>
+          </h2>
+          <div class="group-body">
+            <div class="row proxy-one-row">
+              <div><label>proxy_host</label><input type="text" data-k="proxy_host" value="${escapeAttr(
+                key('proxy_host')
+              )}" placeholder="sg.arxlabs.io:3010" /></div>
+              <div><label>proxy_user</label><input type="text" data-k="proxy_user" value="${escapeAttr(
+                key('proxy_user')
+              )}" placeholder="代理用户名" /></div>
+              <div><label>proxy_pass</label><input type="text" data-k="proxy_pass" value="${escapeAttr(
+                key('proxy_pass')
+              )}" placeholder="代理密码" /></div>
+              <div><label>fingerprint_id</label><input type="text" data-k="fingerprint_id" value="${escapeAttr(
+                key('fingerprint_id')
+              )}" placeholder="4567" /></div>
+              <div><label>timezone</label><input type="text" data-k="timezone" value="${escapeAttr(
+                key('timezone')
+              )}" placeholder="America/Chicago" /></div>
+            </div>
+            <div class="accounts">
+              <h3>账号列表（name / type / auth JSON，如 claude 用 {"sessionKey": "xxx"}）</h3>
+              <div class="accounts-list"></div>
+              ${
+                totalPages > 1
+                  ? `
+              <div class="pagination" style="margin-top:12px;display:flex;align-items:center;gap:12px;">
+                <span class="info" style="font-size:13px;color:var(--text-muted)">第 ${
+                  currentPage + 1
+                } / ${totalPages} 页，共 ${totalCount} 条</span>
+                <select data-action="page-size">
+                  ${PAGE_SIZE_OPTIONS.map(
+                    (n) =>
+                      `<option value="${n}" ${n === pageSize ? 'selected' : ''}>${n} 条/页</option>`
+                  ).join('')}
+                </select>
+                <button type="button" class="btn btn-ghost btn-sm" data-action="prev" ${
+                  currentPage <= 0 ? 'disabled' : ''
+                }>上一页</button>
+                <button type="button" class="btn btn-ghost btn-sm" data-action="next" ${
+                  currentPage >= totalPages - 1 ? 'disabled' : ''
+                }>下一页</button>
+              </div>
+              `
+                  : ''
+              }
+            </div>
+          </div>
+        `
+
+        div.querySelector('[data-action="toggle"]').onclick = () => {
+          groupCollapsed[gkey] = !groupCollapsed[gkey]
+          opts.rerender()
+        }
+        ;['proxy_host', 'proxy_user', 'proxy_pass', 'fingerprint_id', 'timezone'].forEach((k) => {
+          const el = div.querySelector(`[data-k="${k}"]`)
+          if (el) el.oninput = (e) => onGroupChange(groupIndex, k, e.target.value)
+        })
+        div.querySelector('[data-action="add-account"]').onclick = () => onAddAccount(groupIndex)
+        div.querySelector('[data-action="remove-group"]').onclick = () => onRemoveGroup(groupIndex)
+        const ps = div.querySelector('[data-action="page-size"]')
+        if (ps)
+          ps.onchange = (e) => {
+            groupPageSize[gkey] = Number(e.target.value)
+            groupPage[gkey] = 0
+            opts.rerender()
+          }
+        const prev = div.querySelector('[data-action="prev"]')
+        if (prev)
+          prev.onclick = () => {
+            if (currentPage > 0) {
+              groupPage[gkey] = currentPage - 1
+              opts.rerender()
+            }
+          }
+        const next = div.querySelector('[data-action="next"]')
+        if (next)
+          next.onclick = () => {
+            if (currentPage < totalPages - 1) {
+              groupPage[gkey] = currentPage + 1
+              opts.rerender()
+            }
+          }
+
+        const list = div.querySelector('.accounts-list')
+        pageAccounts.forEach((acc, localIndex) => {
+          const globalIndex = pageIndices[localIndex]
+          list.appendChild(
+            renderAccount(
+              acc,
+              globalIndex,
+              group,
+              onRemoveAccount.bind(null, groupIndex),
+              onAccountChange.bind(null, groupIndex)
+            )
+          )
+        })
+        return div
+      }
+
+      function getConfigFromForm() {
+        const list = document.getElementById('list')
+        const groups = []
+        list.querySelectorAll('.group').forEach((groupEl) => {
+          const g = {
+            proxy_host: groupEl.querySelector('[data-k="proxy_host"]')?.value?.trim() || '',
+            proxy_user: groupEl.querySelector('[data-k="proxy_user"]')?.value?.trim() || '',
+            proxy_pass: groupEl.querySelector('[data-k="proxy_pass"]')?.value?.trim() || '',
+            fingerprint_id: groupEl.querySelector('[data-k="fingerprint_id"]')?.value?.trim() || '',
+            timezone: groupEl.querySelector('[data-k="timezone"]')?.value?.trim() || undefined,
+            accounts: [],
+          }
+          groupEl.querySelectorAll('.account').forEach((accEl) => {
+            const name = accEl.querySelector('[data-k="name"]')?.value?.trim()
+            const type = accEl.querySelector('[data-k="type"]')?.value?.trim() || 'claude'
+            const authStr = accEl.querySelector('[data-k="auth"]')?.value?.trim() || '{}'
+            if (name) g.accounts.push({ name, type, auth: parseAuth(authStr) })
+          })
+          if (g.accounts.length) groups.push(g)
+        })
+        return groups
+      }
+
+      let config = []
+
+      function render(configData) {
+        config = JSON.parse(JSON.stringify(configData))
+        const searchText =
+          (document.getElementById('search') && document.getElementById('search').value) || ''
+        const filtered = filterConfig(config, searchText)
+        const list = document.getElementById('list')
+        list.innerHTML = ''
+
+        const totalGroups = config.length
+        const totalAccounts = config.reduce((n, g) => n + (g.accounts || []).length, 0)
+        const statsEl = document.getElementById('stats')
+        if (statsEl) {
+          statsEl.textContent = searchText.trim()
+            ? `共 ${totalGroups} 个代理组、${totalAccounts} 个账号（当前筛选 ${filtered.length} 组）`
+            : `共 ${totalGroups} 个代理组、${totalAccounts} 个账号`
+        }
+
+        function rerender() {
+          render(config)
+        }
+        function onGroupChange(gi, k, v) {
+          if (config[gi]) config[gi][k] = v
+        }
+        function onAddAccount(gi) {
+          if (!config[gi].accounts) config[gi].accounts = []
+          config[gi].accounts.push({ name: '', type: 'claude', auth: {} })
+          rerender()
+        }
+        function onRemoveAccount(gi, ai) {
+          config[gi].accounts.splice(ai, 1)
+          rerender()
+        }
+        function onAccountChange(gi, ai, k, v) {
+          if (config[gi].accounts[ai]) {
+            if (k === 'auth') config[gi].accounts[ai].auth = parseAuth(v)
+            else config[gi].accounts[ai][k] = v
+          }
+        }
+        function onRemoveGroup(gi) {
+          config.splice(gi, 1)
+          rerender()
+        }
+
+        filtered.forEach(({ group, groupIndex, accountIndices }) => {
+          list.appendChild(
+            renderGroup(
+              group,
+              groupIndex,
+              config,
+              onRemoveGroup,
+              onAddAccount,
+              onRemoveAccount,
+              onAccountChange,
+              onGroupChange,
+              { rerender, accountIndices }
+            )
+          )
+        })
+      }
+
+      document.getElementById('addGroup').onclick = () => {
+        config.push({
+          proxy_host: '',
+          proxy_user: '',
+          proxy_pass: '',
+          fingerprint_id: '',
+          timezone: 'America/Chicago',
+          accounts: [{ name: '', type: 'claude', auth: {} }],
+        })
+        render(config)
+      }
+
+      document.getElementById('load').onclick = async () => {
+        try {
+          await loadTypes()
+          const data = await loadConfig()
+          render(data)
+          showMsg('已加载')
+        } catch (e) {
+          showMsg('加载失败: ' + e.message, 'error')
+        }
+      }
+
+      document.getElementById('save').onclick = async () => {
+        const toSave = getConfigFromForm()
+        if (!toSave.length) {
+          showMsg('请至少保留一个代理组且每组至少一个账号', 'error')
+          return
+        }
+        try {
+          const res = await fetch(API, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(toSave),
+          })
+          const text = await res.text()
+          if (!res.ok) throw new Error(text || res.statusText)
+          showMsg('保存成功并已生效')
+          const cfg = await loadConfig()
+          render(cfg)
+        } catch (e) {
+          showMsg('保存失败: ' + e.message, 'error')
+        }
+      }
+
+      let searchDebounce
+      document.getElementById('search').oninput = () => {
+        clearTimeout(searchDebounce)
+        searchDebounce = setTimeout(() => render(config), 200)
+      }
+      ;(async () => {
+        await loadTypes()
+        try {
+          const data = await loadConfig()
+          render(data)
+        } catch (e) {
+          render([])
+          showMsg('未加载到配置，可新建后保存', 'error')
+        }
+      })()
+    </script>
+  </body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "manifest_version": 2,
+  "name": "Proxy Auth Autofill",
+  "version": "1.1",
+  "description": "帐号密码填写器（动态生成）",
+  "permissions": [
+    "webRequest",
+    "webRequestBlocking",
+    "<all_urls>",
+    "windows"
+  ],
+  "background": {
+    "scripts": [
+      "background.js"
+    ],
+    "persistent": true
+  },
+  "browser_action": {
+    "default_title": "代理认证"
+  }
+}
