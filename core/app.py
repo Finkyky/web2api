@@ -2,9 +2,10 @@
 FastAPI 应用组装：配置加载、账号池、会话缓存、浏览器管理、插件注册、路由挂载。
 """
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
+from typing import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,10 +15,11 @@ from core.api.chat_handler import ChatHandler
 from core.api.config_routes import create_config_router
 from core.api.routes import create_router
 from core.config.repository import ConfigRepository
+from core.config.settings import get
+from core.constants import CDP_PORT_RANGE, CHROMIUM_BIN
 from core.plugin.base import PluginRegistry
 from core.plugin.claude import register_claude_plugin
 from core.runtime.browser_manager import BrowserManager
-from core.runtime.keys import ProxyKey
 from core.runtime.session_cache import SessionCache
 
 logger = logging.getLogger(__name__)
@@ -33,62 +35,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     repo.init_schema()
     groups = repo.load_groups()
 
-    if not groups:
-        logger.warning("数据库无配置，请先在 /config 配置页添加或通过 API 写入")
-        app.state.chat_handler = None
-        app.state.session_cache = SessionCache()
-        app.state.browser_manager = BrowserManager()
-        app.state.config_repo = ConfigRepository()
-        yield
-        return
-
+    chromium_bin = (get("browser", "chromium_bin") or "").strip() or CHROMIUM_BIN
+    port_start = int(get("browser", "cdp_port_start") or 9223)
+    port_count = int(get("browser", "cdp_port_count") or 20)
+    port_range = (
+        list(range(port_start, port_start + port_count))
+        if port_count > 0
+        else list(CDP_PORT_RANGE)
+    )
     pool = AccountPool.from_groups(groups)
     session_cache = SessionCache()
-    browser_manager = BrowserManager()
-    # 启动时为每个代理组、每个已注册 type 预建浏览器、填满 page 池并预登录
-    for g in groups:
-        proxy_key = ProxyKey(
-            g.proxy_host,
-            g.proxy_user,
-            g.fingerprint_id,
-        )
-        for type_name in PluginRegistry.all_types():
-            plugin = PluginRegistry.get(type_name)
-            if plugin is None:
-                continue
-            accounts_of_type = [
-                a for a in g.accounts if a.type == type_name and a.is_available()
-            ]
-            apply_auth_fn: Any = None
-            if accounts_of_type:
-                account = accounts_of_type[0]
-                pl = plugin
-
-                async def _apply_auth(ctx: Any, p: Any) -> None:
-                    await pl.apply_auth(ctx, p, account.auth)
-
-                apply_auth_fn = _apply_auth
-            else:
-                logger.debug(
-                    "代理组 %s 下无可用 %s 账号，跳过预登录",
-                    proxy_key.fingerprint_id,
-                    type_name,
-                )
-            try:
-                await browser_manager.init_page_pool(
-                    proxy_key,
-                    g.proxy_pass,
-                    type_name,
-                    plugin.create_page,
-                    apply_auth_fn=apply_auth_fn,
-                )
-            except Exception as e:
-                logger.warning(
-                    "启动时预建 page 池失败 proxy=%s type=%s: %s",
-                    proxy_key.fingerprint_id,
-                    type_name,
-                    e,
-                )
+    browser_manager = BrowserManager(
+        chromium_bin=chromium_bin,
+        port_range=port_range,
+    )
     app.state.chat_handler = ChatHandler(
         pool=pool,
         session_cache=session_cache,
@@ -98,9 +58,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.session_cache = session_cache
     app.state.browser_manager = browser_manager
     app.state.config_repo = repo
+    if not groups:
+        logger.warning("数据库无配置，服务已启动但当前无可用账号")
+    try:
+        await app.state.chat_handler.prewarm_resident_browsers()
+    except Exception:
+        logger.exception("启动预热浏览器失败")
+    app.state.maintenance_task = asyncio.create_task(
+        app.state.chat_handler.run_maintenance_loop()
+    )
     logger.info("服务已就绪，已注册 type: %s", ", ".join(PluginRegistry.all_types()))
     yield
-    # shutdown: 可在此关闭 browser_manager 中浏览器（当前为按需连接，不常驻）
+    task = getattr(app.state, "maintenance_task", None)
+    handler = getattr(app.state, "chat_handler", None)
+    if handler is not None:
+        await handler.shutdown()
+    if task is not None:
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     app.state.chat_handler = None
 
 

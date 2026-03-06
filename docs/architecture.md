@@ -1,97 +1,175 @@
-# 项目业务架构（重构方案）
+# 项目业务架构（当前实现）
 
-## 1. 数据模型
+## 1. 总体模型
 
-数据库中按**代理 IP（指纹 ID）**分组，每个 IP 组下可配置账号。账号字段：
+这是一个基于 `FastAPI + Playwright + Chromium CDP` 的 OpenAI 兼容网关。
 
-- **名称**：显示用
-- **类别（type）**：如 `claude`、`chatgpt`、`kimi`
-- **认证字段（auth）**：一个 JSON，具体 key 由各 type 的插件决定（如 claude 用 `sessionKey`，其他可能用 token 等）
+- 对外提供 `/{type}/v1/chat/completions`
+- 对内按 **代理组 / 浏览器 / type tab / session** 调度站点请求
+- 当前已落地的插件是 `claude`
 
-约定：**一个账号记录只属于一个 type**。同一代理人在 DB 中可有多条记录（如一条 type=claude，一条 type=chatgpt）。**不设 profile_id**，user-data-dir 按系统现有拼接方式（如按指纹/IP 组等）生成。
+## 2. 运行时层级
 
-## 2. 缓存层次（树形结构）
+当前实现已经不再使用“一个 type 一个 page 池”的旧模型，而是：
 
-- **浏览器**：缓存的是**进程（process）**，对应唯一指纹 ID（一个 IP 组一个进程）
-- **context**：CDP 连接，挂在浏览器下
-- **page**：CDP 连接，挂在 context 下；同一 context 下**每个 type 一个 page**（一个 tab），按 type 复用；若某 type 需要多步 URL（如登录再对话），在同一 page 内完成，不开多个 page
-- **会话**：挂在 page 下；**一个 page 下可有多个会话**。会话由「会话 ID」绑定，**会话 ID 全局唯一**，匹配到即可向上查找到对应 page、context。进程内缓存，不跨进程、不持久化。
-
-结构示意：
-
-```
-浏览器（对应唯一指纹，缓存 process）
-  └── context（CDP 连接）
-        └── page（CDP 连接，一个 type 一个 page）
-              └── 会话（多个，由 session_id 区分）
+```text
+ProxyGroup（代理组）
+  └── Browser（一个代理组一个 Chromium 进程）
+        └── Tab（一个 type 在一个浏览器里只有一个 tab）
+              └── Sessions（一个 tab 下可挂多个会话）
 ```
 
-## 3. 接口形态
+核心约束：
 
-- 协议：OpenAI 兼容格式（如 `/v1/chat/completions`）
-- 同一进程、同一端口，用 path 前缀区分 type：
-  - `baseUrl = http://ip:port/type`
-  - 例：`http://ip:port/claude/v1/chat/completions`、`http://ip:port/kimi/v1/chat/completions`
-- 请求 `/type/v1/chat/completions` 时，仅从「类别 = type」的账号中做 acquire
+- 一个浏览器只属于一个代理组
+- 一个浏览器里，一个 `type` 只允许一个 tab
+- 一个 tab 绑定一个账号
+- tab 只有在 drained 后才能切号
 
-## 4. 会话 ID 的携带方式
+## 3. 配置与数据
 
-**请求中**：在 content 里必须写成 HTML 注释形式：
+### 账号配置
 
-- 格式：`<!-- conv_uuid=xxx -->`，其中 `xxx` 为会话 ID
-- 基础架构从 messages 的 content 中解析该标记，若存在且会话缓存中有对应项则复用（通过 session_id 向上查到 page、context），否则创建新会话
+账号配置仍存 SQLite：
 
-**响应中**（把 session_id 交给客户端以便下次复用）：流式、非流式均在**返回消息的最前面**加一条同格式注释 `<!-- conv_uuid=xxx -->`，xxx 为本次会话 ID（首次创建时由服务端生成并在此返回）
+- `proxy_group`
+- `account(name, type, auth, unfreeze_at)`
 
-## 5. 请求处理流程
+### 运行时配置
 
-用户调用 `http://ip:port/type/v1/chat/completions` 时：
+调度与回收参数从根目录 `config.yaml` 读取，例如：
 
-1. 从 messages 的 content 中解析是否携带 `conv_uuid=xxx`
-2. 若有且会话缓存中存在该会话 ID → 复用该会话
-3. 若无或缓存中无 → 需要创建新会话，再按下列分支执行：
+- `scheduler.tab_max_concurrent`
+- `scheduler.browser_gc_interval_seconds`
+- `scheduler.tab_idle_seconds`
+- `scheduler.resident_browser_count`
 
-```
-if (存在浏览器 context) {
-    if (存在该 type 对应的 page) {
-        if (message 中携带 conv_uuid 且 会话缓存 存在此 ID) {
-            复用该会话，发送请求
-        } else {
-            创建新会话，发送请求
-        }
-    } else {
-        创建新 page、登录（插件实现）、创建会话、发送请求
-    }
-} else {
-    打开浏览器、打开该 type 的 page（插件提供）、CDP 连接、登录（插件实现）、创建会话、发送请求
-}
-```
+## 4. 浏览器与预热
 
-## 6. 插件式架构
+启动后不会为所有代理组全部拉起浏览器。
 
-支持某种 type（如 claude）= 引入对应插件并注册。基础架构负责：
+当前策略是：
 
-- 按 (指纹 ID, type) 管理 context / page / 会话缓存
-- 解析 content 中的 `conv_uuid=xxx`
-- 按 path 的 type 路由到对应插件
-- 从 DB 加载账号时按 type 过滤后 acquire
+1. 根据 `resident_browser_count` 预热前若干个有可用账号的代理组
+2. 每个预热浏览器内，为该组下每个可用 `type` 打开 1 个 tab
+3. tab 创建后立即对该账号执行登录/写 cookie
 
-各 type 的「如何打开 page、如何登录、如何创建/复用会话、如何发 completion」由插件实现。**429 与账号封禁、重试策略**也由插件实现（不同网站策略不同），基础架构不统一处理。
+这样可以保证至少有一批热浏览器，后续请求优先命中热资源。
 
-## 7. 插件接口草案（由现有 web2api 反推）
+## 5. Tab 调度规则
 
-以下为最小可用的插件接口约定，便于实现「基础架构 + 第一个 claude 插件」。
+一次新请求（无法复用旧 session）会按下面的顺序选资源：
 
-| 能力           | 接口约定                                                                                          | 说明                                                                                                                            |
-| -------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| 打开/复用 page | `ensure_page(context: BrowserContext) -> Page`                                                    | 若 context 中已有该 type 的 page（如 URL 匹配）则复用，否则 `context.new_page()` 并 goto 目标 URL                               |
-| 应用认证       | `apply_auth(context: BrowserContext, page: Page, auth: dict) -> None`                             | 用账号的 auth JSON 写 cookie / 设 header 等，必要时 `page.reload()`                                                             |
-| 创建会话       | `create_conversation(context: BrowserContext, page: Page) -> str \| None`                         | 调用该 type 的 API 创建会话，返回会话 ID（如 conversation_uuid）；失败返回 None                                                 |
-| 流式补全       | `stream_completion(context, page, session_id: str, message: str, **kwargs) -> AsyncIterator[str]` | 在已有会话上发一条 message，逐块 yield 助手回复；会话续写所需的额外状态（如 parent_message_uuid）由插件在内部或通过 kwargs 维护 |
+1. 已打开浏览器里，已有该 `type` 的可服务 tab
+2. 已打开浏览器里，没有该 `type` tab，但该组有可用账号，可直接新开 tab
+3. 已打开浏览器里，该 `type` tab 已 drained，且同组存在其他可用账号，可原地切号
+4. 如果以上都没有，再新开一个有该 `type` 可用账号的浏览器
 
-可选扩展（按需由插件实现）：
+目标是：
 
-- **解析 content 中的会话 ID**：若某 type 的会话 ID 格式与统一的 `conv_uuid=xxx` 不同，可由插件提供 `parse_session_id(messages) -> str | None`，基础架构优先用插件解析结果再回退到默认 `conv_uuid=xxx`。
-- **会话元数据**：若插件需要保存与会话绑定的额外数据（如 Claude 的 org_uuid、parent_message_uuid），由插件在内存中按 session_id 维护，或由基础架构提供 `SessionState` 字典由插件读写。
+- 优先复用热 tab
+- 其次复用已打开浏览器
+- 最后才冷启动新浏览器
 
-注册方式建议：插件在加载时向全局 Registry 注册 `type_name -> 上述接口实现`，基础架构根据 path 中的 type 查找并调用。
+## 6. 会话复用
+
+### 会话 ID 传递方式
+
+当前实现使用 **零宽字符** 携带 `session_id`：
+
+- 服务端把 `session_id` 编码成零宽标记，附加到 assistant 回复末尾
+- 客户端只要把 assistant 内容原样带回，服务端就能再次解析
+- 解析时会从 **最后一条带标记的消息** 开始逆序查找，优先拿最新 session
+
+### 会话绑定规则
+
+每个 session 绑定到：
+
+- `proxy_key`
+- `type`
+- `account_id`
+
+复用时必须同时满足：
+
+- session 仍在缓存中
+- 对应 tab 还存在
+- tab 当前绑定账号仍等于 session 的账号
+- 插件内部仍持有该 session 的站点状态
+- tab 当前可接新请求
+
+任一条件不满足，则放弃复用，改为新建会话并回放完整历史。
+
+## 7. 请求流程
+
+### 复用旧会话
+
+1. 解析 `type`
+2. 逆序解析消息中的最新 `session_id`
+3. 命中缓存后，校验 session 对应 tab/account 是否仍然有效
+4. 若有效，直接复用站点会话，不回放完整历史
+
+### 新建会话
+
+1. 根据调度规则选择一个目标 tab
+2. 如果该 tab 尚不存在，则新建并登录
+3. 调用插件创建站点侧 conversation
+4. 以**完整历史**组装 prompt，并发送首条消息
+5. 将新 `session_id` 写入缓存并附加到回复末尾
+
+## 8. 额度耗尽 / 429
+
+插件上报 `AccountFrozenError` 后，当前实现会：
+
+1. 把该账号的 `unfreeze_at` 写回数据库
+2. 将该 tab 标记为 `draining/frozen`
+3. 使该 tab 下已有 session 全部失效
+4. 当前请求重试，重新按调度规则找资源
+
+当该 tab 没有活跃请求后：
+
+- 若原账号已恢复可用，则直接恢复该 tab
+- 否则若同组有其他可用账号，则在当前 tab 上切号
+- 否则关闭该 tab
+
+## 9. 浏览器回收
+
+后台维护循环会按 `browser_gc_interval_seconds` 周期扫描浏览器。
+
+回收条件：
+
+- 浏览器下所有 tab 都没有活跃请求
+- 所有 tab 都已经空闲超过 `tab_idle_seconds`
+- 当前打开的浏览器数大于 `resident_browser_count`
+
+回收时会：
+
+- 关闭浏览器下所有 tab
+- 失效这些 tab 对应的全部 session
+- 最后关闭浏览器进程
+
+## 10. Tools / Function Calling
+
+Tools 仍走 ReAct 兼容层，不依赖站点原生 function calling：
+
+- 请求带 `tools` 时，服务端注入 ReAct Prompt
+- 模型输出 `Thought / Action / Action Input`
+- 服务端解析成 OpenAI `tool_calls`
+- 新建会话时，完整历史回放也会保留这套 ReAct 格式
+
+## 11. 插件职责
+
+基础架构负责：
+
+- 账号与代理组调度
+- browser/tab/session 生命周期
+- 会话缓存与失效
+- 浏览器预热与回收
+
+插件负责：
+
+- 打开站点页面
+- 写入认证
+- 创建站点会话
+- 在已有会话上发送消息
+- 解析站点 SSE
+- 报告 429/额度耗尽

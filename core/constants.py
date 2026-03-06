@@ -6,7 +6,7 @@ from pathlib import Path
 CHROMIUM_BIN = "/Applications/Chromium.app/Contents/MacOS/Chromium"
 REMOTE_DEBUGGING_PORT = 9223  # 默认端口，单浏览器兼容
 # 多浏览器并存时的端口池（按 ProxyKey 各占一端口，仅当 refcount=0 时关闭并回收端口）
-CDP_PORT_RANGE = list(range(9223, 9233))  # 9223..9232，最多 10 个并发浏览器
+CDP_PORT_RANGE = list(range(9223, 9243))  # 9223..9232，最多 20 个并发浏览器
 CDP_ENDPOINT = "http://127.0.0.1:9223"
 TIMEZONE = "America/Chicago"
 USER_DATA_DIR_PREFIX = "fp-data"  # user_data_dir = home / fp-data / fingerprint_id

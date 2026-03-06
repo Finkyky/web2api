@@ -2,6 +2,8 @@
 
 from typing import NamedTuple
 
+from core.constants import TIMEZONE
+
 
 class ProxyKey(NamedTuple):
     """唯一标识一个代理组（一个浏览器进程）。"""
@@ -9,3 +11,4 @@ class ProxyKey(NamedTuple):
     proxy_host: str
     proxy_user: str
     fingerprint_id: str
+    timezone: str = TIMEZONE

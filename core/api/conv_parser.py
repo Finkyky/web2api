@@ -106,6 +106,34 @@ def decode_session_id(text: str) -> str | None:
         return None
 
 
+def decode_latest_session_id(text: str) -> str | None:
+    """
+    从文本中提取最后一个被标记包裹的会话 ID。
+    用于客户端保留完整历史时，优先命中最近一次返回的 session_id。
+    """
+    matches = list(
+        re.finditer(
+            re.escape(_HEAD_MARK) + r"(" + _ZW_CLASS + r"+?)" + re.escape(_TAIL_MARK),
+            text,
+        )
+    )
+    if not matches:
+        return None
+    body = matches[-1].group(1)
+    if len(body) % 3 != 0:
+        return None
+    b64_chars: list[str] = []
+    for i in range(0, len(body), 3):
+        idx = _decode_b64idx(body[i : i + 3])
+        if idx is None:
+            return None
+        b64_chars.append("=" if idx == _PAD_IDX else _B64_CHARS[idx])
+    try:
+        return base64.b64decode("".join(b64_chars)).decode()
+    except Exception:
+        return None
+
+
 def extract_session_id_marker(text: str) -> str:
     """
     从文本中提取完整的零宽会话 ID 标记段（HEAD_MARK + body + TAIL_MARK），
@@ -146,13 +174,13 @@ def _normalize_content(content: str | list[Any]) -> str:
 
 
 def parse_conv_uuid_from_messages(messages: list[dict[str, Any]]) -> str | None:
-    """从 messages 中解析会话 ID（从消息内容的零宽标记中解码）。"""
-    for m in messages:
+    """从 messages 中解析最新会话 ID（从最后一条带标记的消息开始逆序查找）。"""
+    for m in reversed(messages):
         content = m.get("content")
         if content is None:
             continue
         text = _normalize_content(content)
-        decoded = decode_session_id(text)
+        decoded = decode_latest_session_id(text)
         if decoded is not None:
             return decoded
     return None

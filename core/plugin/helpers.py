@@ -168,6 +168,7 @@ async def stream_raw_via_page_fetch(
     *,
     on_http_error: Callable[[str, dict[str, str] | None], int | None] | None = None,
     on_headers: Callable[[dict[str, str]], None] | None = None,
+    error_state: dict[str, bool] | None = None,
     fetch_timeout: int = 90,
     read_timeout: float = 130.0,
 ) -> AsyncIterator[str]:
@@ -229,13 +230,20 @@ async def stream_raw_via_page_fetch(
                     continue
                 if chunk.startswith("__error__:"):
                     msg = chunk[10:].strip()
-                    logger.warning("[fetch] __error__ from page: %s", msg)
+                    saw_terminal = bool(error_state and error_state.get("terminal"))
                     if on_http_error:
                         unfreeze_at = on_http_error(msg, headers)
                         if isinstance(unfreeze_at, int):
+                            logger.warning("[fetch] __error__ from page: %s", msg)
                             raise AccountFrozenError(msg, unfreeze_at)
-                    else:
-                        raise RuntimeError(msg)
+                    if saw_terminal:
+                        logger.info(
+                            "[fetch] page fetch disconnected after terminal event: %s",
+                            msg,
+                        )
+                        continue
+                    logger.warning("[fetch] __error__ from page before terminal event: %s", msg)
+                    raise RuntimeError(msg)
                     continue
                 yield chunk
         finally:
@@ -285,6 +293,7 @@ async def stream_completion_via_sse(
     *,
     chat_page_url: str | None = None,
     on_http_error: Callable,
+    is_terminal_event: Callable[[str], bool] | None = None,
     collect_message_id: list[str] | None = None,
 ) -> AsyncIterator[str]:
     """
@@ -293,6 +302,7 @@ async def stream_completion_via_sse(
     parse_event(payload) 返回 (texts, message_id, error)，error 非空时仅打 debug 日志不抛错。
     """
     buffer = ""
+    stream_state: dict[str, bool] = {"terminal": False}
     async for chunk in stream_raw_via_page_fetch(
         context,
         page,
@@ -301,9 +311,12 @@ async def stream_completion_via_sse(
         request_id,
         chat_page_url=chat_page_url,
         on_http_error=on_http_error,
+        error_state=stream_state,
     ):
         buffer, payloads = parse_sse_to_events(buffer, chunk)
         for payload in payloads:
+            if is_terminal_event and is_terminal_event(payload):
+                stream_state["terminal"] = True
             try:
                 texts, message_id, error = parse_event(payload)
             except Exception as e:

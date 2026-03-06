@@ -1,52 +1,34 @@
 """
-浏览器管理器：按 ProxyKey 多浏览器并存，每键一个进程+CDP+context+按 type 的 Page 动态调度池。
-每 page 支持多并发（默认 5），用 request_id 隔离；满 5 时预开新 page；非主 page 空闲 10 分钟自动关闭。
+浏览器管理器：按 ProxyKey 管理浏览器进程；每个浏览器内每个 type 仅保留一个 tab。
+
+当前实现的职责：
+
+- 一个 ProxyKey 对应一个 Chromium 进程
+- 一个浏览器内，一个 type 只允许一个 page/tab
+- tab 绑定一个 account，只有 drained 后才能切号
+- tab 可承载多个 session，并记录活跃请求数与最近使用时间
 """
+
+from __future__ import annotations
 
 import asyncio
 import logging
 import os
 import subprocess
-import uuid
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Coroutine
 
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 
-from core.constants import (
-    CDP_PORT_RANGE,
-    CHROMIUM_BIN,
-    TIMEZONE,
-    user_data_dir,
-)
+from core.constants import CDP_PORT_RANGE, CHROMIUM_BIN, TIMEZONE, user_data_dir
 from core.runtime.keys import ProxyKey
 
 logger = logging.getLogger(__name__)
 
 CreatePageFn = Callable[[BrowserContext], Coroutine[Any, Any, Page]]
 ApplyAuthFn = Callable[[BrowserContext, Page], Coroutine[Any, Any, None]]
-
-
-@dataclass
-class _PageSlot:
-    """单个 page 槽位：引用计数 + 是否主 page + 空闲关闭任务。"""
-
-    page: Page
-    ref_count: int = 0
-    is_main: bool = False
-    idle_task: asyncio.Task[None] | None = field(default=None, repr=False)
-
-
-@dataclass
-class _PagePool:
-    """某 type 的动态 page 池：槽位列表 + 每 page 最大并发 + 空闲关闭时间。"""
-
-    slots: list[_PageSlot] = field(default_factory=list)
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    create_page_fn: CreatePageFn | None = None
-    page_max_concurrent: int = 5
-    idle_shutdown_seconds: float = 600.0
 
 
 async def _wait_for_cdp(
@@ -80,87 +62,84 @@ def _is_cdp_listening(port: int) -> bool:
 
 
 @dataclass
-class _BrowserEntry:
+class TabRuntime:
+    """浏览器中的一个 type tab。"""
+
+    type_name: str
+    page: Page
+    account_id: str
+    active_requests: int = 0
+    accepting_new: bool = True
+    state: str = "ready"
+    last_used_at: float = field(default_factory=time.time)
+    frozen_until: int | None = None
+    sessions: set[str] = field(default_factory=set)
+
+
+@dataclass
+class BrowserEntry:
+    """单个 ProxyKey 对应的浏览器运行时。"""
+
     proc: subprocess.Popen[Any]
     port: int
     browser: Browser
     context: BrowserContext
-    page_pools: dict[str, _PagePool] = field(default_factory=dict)
-    refcount: int = 0
+    tabs: dict[str, TabRuntime] = field(default_factory=dict)
+    last_used_at: float = field(default_factory=time.time)
+
+
+@dataclass
+class ClosedTabInfo:
+    """关闭 tab/browser 时回传的 session 清理信息。"""
+
+    proxy_key: ProxyKey
+    type_name: str
+    account_id: str
+    session_ids: list[str]
 
 
 class BrowserManager:
-    """
-    按 ProxyKey 多浏览器并存；refcount 按 type 占用，归零时立即关闭。
-    先查 current_proxy_keys 再决定复用或开新浏览器。
-    """
+    """按代理组管理浏览器及其 type -> tab 映射。"""
 
     def __init__(
         self,
         chromium_bin: str = CHROMIUM_BIN,
         port_range: list[int] | None = None,
-        page_pool_size: int = 3,
-        page_max_concurrent: int = 5,
-        idle_shutdown_seconds: float = 600.0,
     ) -> None:
         self._chromium_bin = chromium_bin
         self._port_range = port_range or list(CDP_PORT_RANGE)
-        self._page_pool_size = page_pool_size
-        self._page_max_concurrent = page_max_concurrent
-        self._idle_shutdown_seconds = idle_shutdown_seconds
-        self._entries: dict[ProxyKey, _BrowserEntry] = {}
+        self._entries: dict[ProxyKey, BrowserEntry] = {}
         self._available_ports: set[int] = set(self._port_range)
         self._playwright: Any = None
 
-    def _close_entry(self, proxy_key: ProxyKey) -> None:
-        """同步关闭：仅终止进程并回收端口（无法 await browser.close，进程退出后 CDP 自然断开）。"""
-        entry = self._entries.get(proxy_key)
-        if entry is None:
-            return
-        for pool in entry.page_pools.values():
-            for slot in pool.slots:
-                if slot.idle_task and not slot.idle_task.done():
-                    slot.idle_task.cancel()
-        entry.page_pools.clear()
-        try:
-            entry.proc.terminate()
-            entry.proc.wait(timeout=8)
-        except subprocess.TimeoutExpired:
-            entry.proc.kill()
-            entry.proc.wait(timeout=3)
-        except Exception as e:
-            logger.warning("关闭浏览器进程时异常: %s", e)
-        self._available_ports.add(entry.port)
-        del self._entries[proxy_key]
+    def current_proxy_keys(self) -> list[ProxyKey]:
+        return list(self._entries.keys())
 
-    async def _close_entry_async(self, proxy_key: ProxyKey) -> None:
+    def browser_count(self) -> int:
+        return len(self._entries)
+
+    def list_browser_entries(self) -> list[tuple[ProxyKey, BrowserEntry]]:
+        return list(self._entries.items())
+
+    def get_browser_entry(self, proxy_key: ProxyKey) -> BrowserEntry | None:
+        return self._entries.get(proxy_key)
+
+    def get_tab(self, proxy_key: ProxyKey, type_name: str) -> TabRuntime | None:
         entry = self._entries.get(proxy_key)
         if entry is None:
-            return
-        for pool in entry.page_pools.values():
-            for slot in pool.slots:
-                if slot.idle_task and not slot.idle_task.done():
-                    slot.idle_task.cancel()
-                try:
-                    await slot.page.close()
-                except Exception:
-                    pass
-        entry.page_pools.clear()
-        if entry.browser is not None:
-            try:
-                await entry.browser.close()
-            except Exception as e:
-                logger.warning("关闭 CDP 浏览器时异常: %s", e)
-        try:
-            entry.proc.terminate()
-            entry.proc.wait(timeout=8)
-        except subprocess.TimeoutExpired:
-            entry.proc.kill()
-            entry.proc.wait(timeout=3)
-        except Exception as e:
-            logger.warning("关闭浏览器进程时异常: %s", e)
-        self._available_ports.add(entry.port)
-        del self._entries[proxy_key]
+            return None
+        return entry.tabs.get(type_name)
+
+    def browser_load(self, proxy_key: ProxyKey) -> int:
+        entry = self._entries.get(proxy_key)
+        if entry is None:
+            return 0
+        return sum(tab.active_requests for tab in entry.tabs.values())
+
+    def touch_browser(self, proxy_key: ProxyKey) -> None:
+        entry = self._entries.get(proxy_key)
+        if entry is not None:
+            entry.last_used_at = time.time()
 
     def _launch_process(
         self,
@@ -193,7 +172,7 @@ class BrowserManager:
             "--fingerprint-platform=windows",
             "--fingerprint-brand=Edge",
             f"--user-data-dir={udd}",
-            f"--timezone={TIMEZONE}",
+            f"--timezone={proxy_key.timezone or TIMEZONE}",
             f"--proxy-server=http://{proxy_key.proxy_host}",
             "--force-webrtc-ip-handling-policy",
             "--webrtc-ip-handling-policy=disable_non_proxied_udp",
@@ -205,14 +184,13 @@ class BrowserManager:
         env["NODE_OPTIONS"] = (
             env.get("NODE_OPTIONS") or ""
         ).strip() + " --no-deprecation"
-        proc = subprocess.Popen(
+        return subprocess.Popen(
             args,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             env=env,
         )
-        return proc
 
     async def ensure_browser(
         self,
@@ -220,19 +198,19 @@ class BrowserManager:
         proxy_pass: str,
     ) -> BrowserContext:
         """
-        确保存在对应 proxy_key 的浏览器；若已有且存活则 refcount+1 并返回 context，否则起新进程并 refcount=1。
-        调用方在请求结束时必须调用 release(proxy_key)。
+        确保存在对应 proxy_key 的浏览器；若已有且存活则直接复用。
         """
         entry = self._entries.get(proxy_key)
         if entry is not None:
             if entry.proc.poll() is not None or not _is_cdp_listening(entry.port):
                 await self._close_entry_async(proxy_key)
             else:
+                entry.last_used_at = time.time()
                 return entry.context
 
         if not self._available_ports:
             raise RuntimeError(
-                "无可用 CDP 端口，当前并发浏览器数已达上限，请稍后重试或增大 CDP_PORT_RANGE"
+                "无可用 CDP 端口，当前并发浏览器数已达上限，请稍后重试或增大 cdp_port_count"
             )
         port = self._available_ports.pop()
         proc = self._launch_process(proxy_key, proxy_pass, port)
@@ -246,7 +224,6 @@ class BrowserManager:
             except Exception:
                 pass
             raise RuntimeError("CDP 未在预期时间内就绪")
-        self._available_ports.discard(port)
 
         if self._playwright is None:
             self._playwright = await async_playwright().start()
@@ -259,283 +236,300 @@ class BrowserManager:
             await browser.close()
             self._available_ports.add(port)
             raise RuntimeError("浏览器无默认 context")
-        self._entries[proxy_key] = _BrowserEntry(
+        self._entries[proxy_key] = BrowserEntry(
             proc=proc,
             port=port,
             browser=browser,
             context=context,
-            page_pools={},
-            refcount=0,
         )
         return context
 
-    def release(self, proxy_key: ProxyKey, type_name: str) -> None:
-        """
-        释放该浏览器上某 type 的占用（如切到下一 IP 组时调用）。
-        清空该 type 的 page 池，refcount 归零则关浏览器。
-        """
-        entry = self._entries.get(proxy_key)
-        if entry is None:
-            return
-        if type_name in entry.page_pools:
-            pool = entry.page_pools[type_name]
-            for slot in pool.slots:
-                if slot.idle_task and not slot.idle_task.done():
-                    slot.idle_task.cancel()
-            del entry.page_pools[type_name]
-            entry.refcount -= 1
-            if entry.refcount <= 0:
-                self._close_entry(proxy_key)
-
-    async def release_async(self, proxy_key: ProxyKey, type_name: str) -> None:
-        """释放该浏览器上某 type 的占用；清空该 type 的 page 池，refcount 归零则关浏览器。"""
-        entry = self._entries.get(proxy_key)
-        if entry is None:
-            return
-        if type_name in entry.page_pools:
-            pool = entry.page_pools[type_name]
-            for slot in pool.slots:
-                if slot.idle_task and not slot.idle_task.done():
-                    slot.idle_task.cancel()
-                try:
-                    await slot.page.close()
-                except Exception:
-                    pass
-            del entry.page_pools[type_name]
-            entry.refcount -= 1
-            if entry.refcount <= 0:
-                await self._close_entry_async(proxy_key)
-
-    def current_proxy_keys(self) -> list[ProxyKey]:
-        """返回当前所有现役浏览器的 proxy_key，供「先查现役再开新」时使用。"""
-        return list(self._entries.keys())
-
-    async def _idle_shutdown_task(
-        self,
-        proxy_key: ProxyKey,
-        type_name: str,
-        slot: _PageSlot,
-        delay_seconds: float,
-    ) -> None:
-        """空闲 N 秒后关闭该 slot 的 page 并从池中移除。"""
-        try:
-            await asyncio.sleep(delay_seconds)
-        except asyncio.CancelledError:
-            return
-        entry = self._entries.get(proxy_key)
-        if entry is None or type_name not in entry.page_pools:
-            return
-        pool = entry.page_pools[type_name]
-        async with pool.lock:
-            if slot.ref_count != 0 or slot not in pool.slots:
-                return
-            pool.slots.remove(slot)
-            slot.idle_task = None
-        try:
-            await slot.page.close()
-        except Exception as e:
-            logger.debug("关闭空闲 page 时异常: %s", e)
-        logger.info(
-            "[pool] idle shutdown page type=%s proxy=%s",
-            type_name,
-            getattr(proxy_key, "fingerprint_id", str(proxy_key)[:20]),
-        )
-
-    async def _preopen_page(self, proxy_key: ProxyKey, type_name: str) -> None:
-        """预开一个 page 入池（ref_count=0），供后续请求使用。"""
-        entry = self._entries.get(proxy_key)
-        if entry is None or type_name not in entry.page_pools:
-            return
-        pool = entry.page_pools[type_name]
-        if pool.create_page_fn is None:
-            return
-        try:
-            new_page = await pool.create_page_fn(entry.context)
-        except Exception as e:
-            logger.warning("预开 page 失败 type=%s: %s", type_name, e)
-            return
-        async with pool.lock:
-            pool.slots.append(_PageSlot(page=new_page, ref_count=0, is_main=False))
-        logger.info(
-            "[pool] preopened page type=%s proxy=%s new_page.url=%s",
-            type_name,
-            getattr(proxy_key, "fingerprint_id", str(proxy_key)[:20]),
-            new_page.url,
-        )
-
-    async def init_page_pool(
+    async def open_tab(
         self,
         proxy_key: ProxyKey,
         proxy_pass: str,
         type_name: str,
+        account_id: str,
         create_page_fn: CreatePageFn,
-        *,
-        pool_size: int | None = None,
-        apply_auth_fn: ApplyAuthFn | None = None,
-    ) -> None:
-        """
-        应用启动时调用：确保浏览器存在并为该 (proxy_key, type) 创建 page 池并预填。
-        若池已存在则跳过。
-        若传入 apply_auth_fn：先创建 1 个 page 并对其执行登录（cookie 写入 context），
-        再创建其余 page；后续 page 继承 context 的 cookie，无需再登录。
-        """
+        apply_auth_fn: ApplyAuthFn,
+    ) -> TabRuntime:
+        """在指定浏览器中创建一个 type tab，并绑定到 account。"""
         context = await self.ensure_browser(proxy_key, proxy_pass)
         entry = self._entries.get(proxy_key)
         if entry is None:
             raise RuntimeError("ensure_browser 未创建 entry")
-        if type_name in entry.page_pools:
-            return
-        pool = _PagePool(
-            create_page_fn=create_page_fn,
-            page_max_concurrent=self._page_max_concurrent,
-            idle_shutdown_seconds=self._idle_shutdown_seconds,
+        existing = entry.tabs.get(type_name)
+        if existing is not None:
+            return existing
+
+        page = await create_page_fn(context)
+        try:
+            await apply_auth_fn(context, page)
+        except Exception:
+            try:
+                await page.close()
+            except Exception:
+                pass
+            raise
+
+        tab = TabRuntime(
+            type_name=type_name,
+            page=page,
+            account_id=account_id,
         )
-        entry.page_pools[type_name] = pool
-        entry.refcount += 1
-        # 启动只开 1 个主 page，并执行登录；后续按需动态开页
-        if apply_auth_fn is not None:
-            try:
-                first_page = await create_page_fn(context)
-                await apply_auth_fn(entry.context, first_page)
-                pool.slots.append(_PageSlot(page=first_page, ref_count=0, is_main=True))
-                logger.info(
-                    "[pool] init 1 main page with auth (dynamic pool) type=%s proxy=%s",
-                    type_name,
-                    getattr(proxy_key, "fingerprint_id", str(proxy_key)[:20]),
-                )
-            except Exception as e:
-                logger.warning(
-                    "启动时初始化 page 池（主 page+登录）失败 type=%s: %s", type_name, e
-                )
-        else:
-            try:
-                first_page = await create_page_fn(context)
-                pool.slots.append(_PageSlot(page=first_page, ref_count=0, is_main=True))
-            except Exception as e:
-                logger.warning("启动时初始化 page 池失败 type=%s: %s", type_name, e)
+        entry.tabs[type_name] = tab
+        entry.last_used_at = time.time()
+        logger.info(
+            "[tab] opened proxy=%s type=%s account=%s",
+            proxy_key.fingerprint_id,
+            type_name,
+            account_id,
+        )
+        return tab
 
-    async def apply_auth_to_pool(
+    async def switch_tab_account(
         self,
         proxy_key: ProxyKey,
         type_name: str,
+        account_id: str,
         apply_auth_fn: ApplyAuthFn,
-    ) -> None:
+    ) -> bool:
         """
-        对池内所有 slot 的 page 执行 apply_auth（如写 cookie、reload）。
-        若无池或池空则跳过。
-        """
-        entry = self._entries.get(proxy_key)
-        if entry is None or type_name not in entry.page_pools:
-            return
-        pool = entry.page_pools[type_name]
-        async with pool.lock:
-            for slot in pool.slots:
-                try:
-                    await apply_auth_fn(entry.context, slot.page)
-                except Exception as e:
-                    logger.warning(
-                        "启动时对 page 应用 auth 失败 type=%s: %s", type_name, e
-                    )
-
-    async def acquire_page_slot(
-        self,
-        proxy_key: ProxyKey,
-        context: BrowserContext,
-        type_name: str,
-        create_page_fn: CreatePageFn,
-    ) -> tuple[Page, str, bool]:
-        """
-        从该 (proxy_key, type) 的动态池中占一个槽位，返回 (page, request_id, is_sole_user)。
-        is_sole_user 保留供将来需要「仅独占时做 reload」等逻辑时使用；当前请求路径只写 cookie 不 reload。
+        在同一个 page 上切换账号。只有 drained 后（active_requests==0）才允许切号。
         """
         entry = self._entries.get(proxy_key)
         if entry is None:
-            raise RuntimeError("ensure_browser 未先于 acquire_page_slot 调用")
-        if type_name not in entry.page_pools:
-            pool = _PagePool(
-                create_page_fn=create_page_fn,
-                page_max_concurrent=self._page_max_concurrent,
-                idle_shutdown_seconds=self._idle_shutdown_seconds,
-            )
-            entry.page_pools[type_name] = pool
-            entry.refcount += 1
-            first_page = await create_page_fn(context)
-            pool.slots.append(_PageSlot(page=first_page, ref_count=0, is_main=True))
-        pool = entry.page_pools[type_name]
-        request_id = str(uuid.uuid4())
-        async with pool.lock:
-            for slot in pool.slots:
-                if slot.ref_count < pool.page_max_concurrent:
-                    if slot.idle_task and not slot.idle_task.done():
-                        slot.idle_task.cancel()
-                        slot.idle_task = None
-                    slot.ref_count += 1
-                    is_sole_user = slot.ref_count == 1
-                    if slot.ref_count == pool.page_max_concurrent:
-                        asyncio.create_task(self._preopen_page(proxy_key, type_name))
-                    logger.info(
-                        "[pool] acquire_page_slot type=%s proxy=%s ref_count=%s request_id=%s",
-                        type_name,
-                        getattr(proxy_key, "fingerprint_id", str(proxy_key)[:20]),
-                        slot.ref_count,
-                        request_id[:8],
-                    )
-                    return (slot.page, request_id, is_sole_user)
-        # 所有 slot 已满（含预开页已被空闲关闭的情况），按需新建 page
-        new_page = await create_page_fn(context)
-        async with pool.lock:
-            new_slot = _PageSlot(page=new_page, ref_count=1, is_main=False)
-            pool.slots.append(new_slot)
-            if new_slot.ref_count == pool.page_max_concurrent:
-                asyncio.create_task(self._preopen_page(proxy_key, type_name))
-            logger.info(
-                "[pool] acquire_page_slot new page (all full or preopened closed) type=%s proxy=%s request_id=%s",
-                type_name,
-                getattr(proxy_key, "fingerprint_id", str(proxy_key)[:20]),
-                request_id[:8],
-            )
-            return (new_page, request_id, True)
+            return False
+        tab = entry.tabs.get(type_name)
+        if tab is None or tab.active_requests != 0:
+            return False
 
-    async def release_page_slot(
-        self, proxy_key: ProxyKey, type_name: str, page: Page
-    ) -> None:
+        tab.accepting_new = False
+        tab.state = "switching"
+        try:
+            await apply_auth_fn(entry.context, tab.page)
+        except Exception:
+            tab.state = "draining"
+            return False
+
+        tab.account_id = account_id
+        tab.accepting_new = True
+        tab.state = "ready"
+        tab.frozen_until = None
+        tab.last_used_at = time.time()
+        tab.sessions.clear()
+        entry.last_used_at = time.time()
+        logger.info(
+            "[tab] switched account proxy=%s type=%s account=%s",
+            proxy_key.fingerprint_id,
+            type_name,
+            account_id,
+        )
+        return True
+
+    def acquire_tab(
+        self,
+        proxy_key: ProxyKey,
+        type_name: str,
+        max_concurrent: int,
+    ) -> Page | None:
         """
-        请求用完后调用：槽位 ref_count 减 1；若归零且非主 page 则启动空闲关闭倒计时。
+        为一次请求占用 tab；tab 必须存在、可接新请求且未达到并发上限。
         """
         entry = self._entries.get(proxy_key)
-        if entry is None or type_name not in entry.page_pools:
+        if entry is None:
+            return None
+        tab = entry.tabs.get(type_name)
+        if tab is None:
+            return None
+        if not tab.accepting_new or tab.active_requests >= max_concurrent:
+            return None
+        tab.active_requests += 1
+        tab.last_used_at = time.time()
+        entry.last_used_at = tab.last_used_at
+        tab.state = "busy"
+        return tab.page
+
+    def release_tab(self, proxy_key: ProxyKey, type_name: str) -> None:
+        """释放一次请求占用。"""
+        entry = self._entries.get(proxy_key)
+        if entry is None:
             return
-        pool = entry.page_pools[type_name]
-        async with pool.lock:
-            for slot in pool.slots:
-                if slot.page is page:
-                    slot.ref_count -= 1
-                    if slot.idle_task and not slot.idle_task.done():
-                        slot.idle_task.cancel()
-                        slot.idle_task = None
-                    if slot.ref_count == 0 and not slot.is_main:
-                        slot.idle_task = asyncio.create_task(
-                            self._idle_shutdown_task(
-                                proxy_key,
-                                type_name,
-                                slot,
-                                pool.idle_shutdown_seconds,
-                            )
-                        )
-                    logger.info(
-                        "[pool] release_page_slot type=%s proxy=%s ref_count=%s",
-                        type_name,
-                        getattr(proxy_key, "fingerprint_id", str(proxy_key)[:20]),
-                        slot.ref_count,
-                    )
-                    return
-        logger.warning(
-            "[pool] release_page_slot page not found in pool type=%s", type_name
+        tab = entry.tabs.get(type_name)
+        if tab is None:
+            return
+        if tab.active_requests > 0:
+            tab.active_requests -= 1
+        tab.last_used_at = time.time()
+        entry.last_used_at = tab.last_used_at
+        if tab.active_requests == 0:
+            if tab.accepting_new:
+                tab.state = "ready"
+            elif tab.frozen_until is not None:
+                tab.state = "frozen"
+            else:
+                tab.state = "draining"
+
+    def mark_tab_draining(
+        self,
+        proxy_key: ProxyKey,
+        type_name: str,
+        *,
+        frozen_until: int | None = None,
+    ) -> None:
+        """禁止 tab 接受新请求，并标记为 draining/frozen。"""
+        entry = self._entries.get(proxy_key)
+        if entry is None:
+            return
+        tab = entry.tabs.get(type_name)
+        if tab is None:
+            return
+        tab.accepting_new = False
+        tab.frozen_until = frozen_until
+        tab.last_used_at = time.time()
+        entry.last_used_at = tab.last_used_at
+        if frozen_until is not None:
+            tab.state = "frozen"
+        else:
+            tab.state = "draining"
+
+    def register_session(
+        self,
+        proxy_key: ProxyKey,
+        type_name: str,
+        session_id: str,
+    ) -> None:
+        entry = self._entries.get(proxy_key)
+        if entry is None:
+            return
+        tab = entry.tabs.get(type_name)
+        if tab is None:
+            return
+        tab.sessions.add(session_id)
+        tab.last_used_at = time.time()
+        entry.last_used_at = tab.last_used_at
+
+    def unregister_session(
+        self,
+        proxy_key: ProxyKey,
+        type_name: str,
+        session_id: str,
+    ) -> None:
+        entry = self._entries.get(proxy_key)
+        if entry is None:
+            return
+        tab = entry.tabs.get(type_name)
+        if tab is None:
+            return
+        tab.sessions.discard(session_id)
+
+    async def close_tab(
+        self,
+        proxy_key: ProxyKey,
+        type_name: str,
+    ) -> ClosedTabInfo | None:
+        """关闭某个 type 的 tab，并返回需要失效的 session 列表。"""
+        entry = self._entries.get(proxy_key)
+        if entry is None:
+            return None
+        tab = entry.tabs.pop(type_name, None)
+        if tab is None:
+            return None
+        try:
+            await tab.page.close()
+        except Exception:
+            pass
+        entry.last_used_at = time.time()
+        logger.info("[tab] closed proxy=%s type=%s", proxy_key.fingerprint_id, type_name)
+        return ClosedTabInfo(
+            proxy_key=proxy_key,
+            type_name=type_name,
+            account_id=tab.account_id,
+            session_ids=list(tab.sessions),
         )
 
-    @property
-    def current_proxy_key(self) -> ProxyKey | None:
-        """返回任意一个当前存在的 key（兼容旧用法）；多浏览器时语义以 refcount 为准。"""
-        if not self._entries:
-            return None
-        return next(iter(self._entries))
+    async def close_browser(self, proxy_key: ProxyKey) -> list[ClosedTabInfo]:
+        return await self._close_entry_async(proxy_key)
+
+    async def _close_entry_async(self, proxy_key: ProxyKey) -> list[ClosedTabInfo]:
+        entry = self._entries.get(proxy_key)
+        if entry is None:
+            return []
+
+        closed_tabs = [
+            ClosedTabInfo(
+                proxy_key=proxy_key,
+                type_name=type_name,
+                account_id=tab.account_id,
+                session_ids=list(tab.sessions),
+            )
+            for type_name, tab in entry.tabs.items()
+        ]
+        for tab in list(entry.tabs.values()):
+            try:
+                await tab.page.close()
+            except Exception:
+                pass
+        entry.tabs.clear()
+        if entry.browser is not None:
+            try:
+                await entry.browser.close()
+            except Exception as e:
+                logger.warning("关闭 CDP 浏览器时异常: %s", e)
+        try:
+            entry.proc.terminate()
+            entry.proc.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            entry.proc.kill()
+            entry.proc.wait(timeout=3)
+        except Exception as e:
+            logger.warning("关闭浏览器进程时异常: %s", e)
+        self._available_ports.add(entry.port)
+        del self._entries[proxy_key]
+        logger.info("[browser] closed proxy=%s", proxy_key.fingerprint_id)
+        return closed_tabs
+
+    async def collect_idle_browsers(
+        self,
+        *,
+        idle_seconds: float,
+        resident_browser_count: int,
+    ) -> list[ClosedTabInfo]:
+        """
+        关闭空闲浏览器：
+
+        - 浏览器下所有 tab 都没有活跃请求
+        - 所有 tab 均已空闲超过 idle_seconds
+        - 当前浏览器数 > resident_browser_count
+        """
+        if len(self._entries) <= resident_browser_count:
+            return []
+
+        now = time.time()
+        candidates: list[tuple[float, ProxyKey]] = []
+        for proxy_key, entry in self._entries.items():
+            if any(tab.active_requests > 0 for tab in entry.tabs.values()):
+                continue
+            if entry.tabs:
+                last_tab_used = max(tab.last_used_at for tab in entry.tabs.values())
+            else:
+                last_tab_used = entry.last_used_at
+            if now - last_tab_used < idle_seconds:
+                continue
+            candidates.append((last_tab_used, proxy_key))
+
+        if not candidates:
+            return []
+
+        closed: list[ClosedTabInfo] = []
+        max_close = max(0, len(self._entries) - resident_browser_count)
+        for _, proxy_key in sorted(candidates, key=lambda item: item[0])[:max_close]:
+            closed.extend(await self._close_entry_async(proxy_key))
+        return closed
+
+    async def close_all(self) -> list[ClosedTabInfo]:
+        """关闭全部浏览器和 tab。"""
+        closed: list[ClosedTabInfo] = []
+        for proxy_key in list(self._entries.keys()):
+            closed.extend(await self._close_entry_async(proxy_key))
+        return closed

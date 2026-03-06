@@ -4,6 +4,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from core.api.conv_parser import strip_session_id_suffix
+
 
 class OpenAIContentPart(BaseModel):
     type: str
@@ -48,11 +50,11 @@ def _norm_content(c: str | list[OpenAIContentPart] | None) -> str:
     if c is None:
         return ""
     if isinstance(c, str):
-        return c
+        return strip_session_id_suffix(c)
     if not isinstance(c, list):
         return ""
-    return " ".join(
-        p.text or "" for p in c if isinstance(p, OpenAIContentPart) and p.text
+    return strip_session_id_suffix(
+        " ".join(p.text or "" for p in c if isinstance(p, OpenAIContentPart) and p.text)
     )
 
 
@@ -66,6 +68,7 @@ def extract_user_content(
     *,
     has_tools: bool = False,
     react_prompt_prefix: str = "",
+    full_history: bool = False,
 ) -> str:
     """
     从 messages 中提取对话，拼成发给模型的 prompt。
@@ -79,28 +82,34 @@ def extract_user_content(
 
     parts: list[str] = []
 
-    # is_first_turn 基于完整 messages 判断，用于决定是否注入 ReAct 前缀
+    # 重建会话时会把完整历史重新回放给站点，因此 tools 指令也需要重新注入。
     is_first_turn = not any(m.role in ("assistant", "tool") for m in messages)
-
-    if has_tools and react_prompt_prefix and is_first_turn:
+    if has_tools and react_prompt_prefix and (full_history or is_first_turn):
         parts.append(react_prompt_prefix)
 
-    last = messages[-1]
-    if last.role == "user":
-        i = len(messages) - 1
-        while i >= 0 and messages[i].role != "assistant":
-            i -= 1
-        tail = messages[i + 1 :]
-    elif last.role == "tool":
-        i = len(messages) - 1
-        while i >= 0 and messages[i].role != "user":
-            i -= 1
-        tail = messages[i + 1 :]
+    if full_history:
+        tail = messages
     else:
-        tail = messages[-2:]
+        last = messages[-1]
+        if last.role == "user":
+            i = len(messages) - 1
+            while i >= 0 and messages[i].role != "assistant":
+                i -= 1
+            tail = messages[i + 1 :]
+        elif last.role == "tool":
+            i = len(messages) - 1
+            while i >= 0 and messages[i].role != "user":
+                i -= 1
+            tail = messages[i + 1 :]
+        else:
+            tail = messages[-2:]
 
     for m in tail:
-        if m.role == "user":
+        if m.role == "system":
+            txt = _norm_content(m.content)
+            if txt:
+                parts.append(f"System：{txt}")
+        elif m.role == "user":
             txt = _norm_content(m.content)
             if txt:
                 if has_tools:

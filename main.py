@@ -9,10 +9,9 @@ import logging
 import sys
 import uvicorn
 
-from core.config.settings import apply_env_from_config
+from core.config.settings import get, load_config
 
-# 先从 config.yaml 中加载配置并写入环境变量（如 CLAUDE_START_URL / CLAUDE_API_BASE）
-apply_env_from_config()
+load_config()
 
 _opt = os.environ.get("NODE_OPTIONS", "").strip()
 if "--no-deprecation" not in _opt:
@@ -26,10 +25,11 @@ logging.basicConfig(
 
 
 def main() -> int:
+    port = int(get("server", "port") or 8001)
     uvicorn.run(
         "core.app:app",
         host="127.0.0.1",
-        port=8001,
+        port=port,
         reload=False,
     )
     return 0

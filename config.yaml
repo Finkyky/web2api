@@ -1,3 +1,33 @@
+server:
+  port: 9000
+
+browser:
+  # 指纹浏览器（fingerprint-chromium）可执行文件路径
+  # 留空则使用默认值：macOS /Applications/Chromium.app/Contents/MacOS/Chromium
+  # Linux 示例：/usr/bin/chromium 或 /opt/fingerprint-chromium/chrome
+  chromium_bin: '/Applications/Chromium.app/Contents/MacOS/Chromium'
+
+  # CDP 端口池：每个浏览器进程占用一个端口
+  # cdp_port_start: 起始端口（默认 9223）
+  # cdp_port_count: 端口数量，即最多可并发的浏览器数（默认 20）
+  cdp_port_start: 9223
+  cdp_port_count: 20
+
+scheduler:
+  # 单个 type tab 同时允许的最大请求数。
+  # 达到上限后，新请求会优先分流到其他已打开浏览器，必要时再拉起新浏览器。
+  tab_max_concurrent: 5
+
+  # 浏览器空闲回收扫描周期（秒）
+  browser_gc_interval_seconds: 300
+
+  # 一个浏览器下所有 tab 在这段时间内都没有请求时，视为可回收（秒）
+  tab_idle_seconds: 900
+
+  # 最少保留多少个浏览器进程不参与回收
+  resident_browser_count: 1
+
+# 通常情况无需配置，用于调试时指向 mock 服务
 claude:
   # Claude Web2API 入口地址，用于浏览器打开站点（可指向 mock 服务）
   # 生产环境使用默认值；调试时可指向 mock 服务，例如：
@@ -10,5 +40,4 @@ claude:
   api_base: ''
 
 mock:
-  # Mock Claude API 服务监听端口，对应环境变量 MOCK_PORT
   port: 8002

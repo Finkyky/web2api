@@ -9,7 +9,6 @@
 
 import json
 import logging
-import os
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -17,6 +16,7 @@ from typing import Any, AsyncIterator
 
 from playwright.async_api import BrowserContext, Page
 
+from core.config.settings import get
 from core.plugin.errors import AccountFrozenError  # noqa: F401  — re-export for backward compat
 from core.plugin.helpers import (
     apply_cookie_auth,
@@ -45,8 +45,9 @@ class SiteConfig:
     cookie_name: str
     cookie_domain: str
     auth_keys: list[str]
-    env_start_url: str = ""
-    env_api_base: str = ""
+    config_section: str = (
+        ""  # config.yaml 中的 section，如 "claude"，用于覆盖 start_url/api_base
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -94,10 +95,26 @@ class AbstractPlugin(ABC):
         message: str,
         **kwargs: Any,
     ) -> AsyncIterator[str]:
+        if False:
+            yield  # 使抽象方法为 async generator，与子类一致，便于 async for 迭代
         raise NotImplementedError
 
     def parse_session_id(self, messages: list[dict[str, Any]]) -> str | None:
         return None
+
+    def is_terminal_sse_event(self, payload: str) -> bool:
+        """判断某条 SSE payload 是否表示本轮响应已正常结束。默认不识别。"""
+        return False
+
+    def has_session(self, session_id: str) -> bool:
+        return session_id in self._session_state
+
+    def drop_session(self, session_id: str) -> None:
+        self._session_state.pop(session_id, None)
+
+    def drop_sessions(self, session_ids: list[str] | set[str]) -> None:
+        for session_id in session_ids:
+            self._session_state.pop(session_id, None)
 
     def model_mapping(self) -> dict[str, str] | None:
         raise NotImplementedError("model_mapping is not implemented")
@@ -128,18 +145,22 @@ class BaseSitePlugin(AbstractPlugin):
 
     site: SiteConfig  # 子类必须赋值
 
-    # ---- 环境变量感知的 URL 属性 ----
+    # ---- 从 config.yaml 读取的 URL 属性（config_section 有值时覆盖默认） ----
 
     @property
     def start_url(self) -> str:
-        if self.site.env_start_url:
-            return os.environ.get(self.site.env_start_url, self.site.start_url)
+        if self.site.config_section:
+            url = get(self.site.config_section, "start_url")
+            if url:
+                return str(url).strip()
         return self.site.start_url
 
     @property
     def api_base(self) -> str:
-        if self.site.env_api_base:
-            return os.environ.get(self.site.env_api_base, self.site.api_base)
+        if self.site.config_section:
+            base = get(self.site.config_section, "api_base")
+            if base:
+                return str(base).strip()
         return self.site.api_base
 
     # ---- 基类全自动实现，子类无需碰 ----
@@ -226,6 +247,7 @@ class BaseSitePlugin(AbstractPlugin):
             request_id,
             chat_page_url=chat_page_url,
             on_http_error=self.on_http_error,
+            is_terminal_event=self.is_terminal_sse_event,
             collect_message_id=out_message_ids,
         ):
             yield text

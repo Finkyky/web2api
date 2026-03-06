@@ -264,6 +264,69 @@
       const TYPES_API = '/api/types'
       let registeredTypes = ['claude']
 
+      // 全球时区列表：优先使用 Intl.supportedValuesOf，否则用静态列表
+      const TIMEZONES = (() => {
+        if (typeof Intl !== 'undefined' && Intl.supportedValuesOf) {
+          try {
+            return Intl.supportedValuesOf('timeZone').sort()
+          } catch (_) {}
+        }
+        return [
+          'Africa/Cairo',
+          'Africa/Johannesburg',
+          'Africa/Lagos',
+          'Africa/Nairobi',
+          'Africa/Tunis',
+          'America/Argentina/Buenos_Aires',
+          'America/Bogota',
+          'America/Chicago',
+          'America/Denver',
+          'America/Lima',
+          'America/Los_Angeles',
+          'America/Mexico_City',
+          'America/New_York',
+          'America/Santiago',
+          'America/Sao_Paulo',
+          'America/Toronto',
+          'America/Vancouver',
+          'Asia/Bangkok',
+          'Asia/Colombo',
+          'Asia/Dubai',
+          'Asia/Ho_Chi_Minh',
+          'Asia/Hong_Kong',
+          'Asia/Jakarta',
+          'Asia/Jerusalem',
+          'Asia/Karachi',
+          'Asia/Kolkata',
+          'Asia/Manila',
+          'Asia/Seoul',
+          'Asia/Shanghai',
+          'Asia/Singapore',
+          'Asia/Taipei',
+          'Asia/Tehran',
+          'Asia/Tokyo',
+          'Australia/Adelaide',
+          'Australia/Melbourne',
+          'Australia/Perth',
+          'Australia/Sydney',
+          'Europe/Amsterdam',
+          'Europe/Athens',
+          'Europe/Berlin',
+          'Europe/Istanbul',
+          'Europe/London',
+          'Europe/Madrid',
+          'Europe/Moscow',
+          'Europe/Paris',
+          'Europe/Rome',
+          'Europe/Stockholm',
+          'Pacific/Auckland',
+          'Pacific/Fiji',
+          'Pacific/Guam',
+          'Pacific/Honolulu',
+          'UTC',
+        ].sort()
+      })()
+
       async function loadTypes() {
         try {
           const res = await fetch(TYPES_API)
@@ -451,9 +514,18 @@
               <div><label>fingerprint_id</label><input type="text" data-k="fingerprint_id" value="${escapeAttr(
                 key('fingerprint_id')
               )}" placeholder="4567" /></div>
-              <div><label>timezone</label><input type="text" data-k="timezone" value="${escapeAttr(
-                key('timezone')
-              )}" placeholder="America/Chicago" /></div>
+              <div><label>timezone</label><select data-k="timezone">${(function () {
+                const val = key('timezone') || 'America/Chicago'
+                const opts = TIMEZONES.includes(val) ? TIMEZONES : [val, ...TIMEZONES].sort()
+                return opts
+                  .map(
+                    (tz) =>
+                      `<option value="${escapeAttr(tz)}" ${
+                        tz === val ? 'selected' : ''
+                      }>${escapeAttr(tz)}</option>`
+                  )
+                  .join('')
+              })()}</select></div>
             </div>
             <div class="accounts">
               <h3>账号列表（name / type / auth JSON，如 claude 用 {"sessionKey": "xxx"}）</h3>
@@ -489,10 +561,12 @@
           groupCollapsed[gkey] = !groupCollapsed[gkey]
           opts.rerender()
         }
-        ;['proxy_host', 'proxy_user', 'proxy_pass', 'fingerprint_id', 'timezone'].forEach((k) => {
+        ;['proxy_host', 'proxy_user', 'proxy_pass', 'fingerprint_id'].forEach((k) => {
           const el = div.querySelector(`[data-k="${k}"]`)
           if (el) el.oninput = (e) => onGroupChange(groupIndex, k, e.target.value)
         })
+        const tzEl = div.querySelector('[data-k="timezone"]')
+        if (tzEl) tzEl.onchange = (e) => onGroupChange(groupIndex, 'timezone', e.target.value)
         div.querySelector('[data-action="add-account"]').onclick = () => onAddAccount(groupIndex)
         div.querySelector('[data-action="remove-group"]').onclick = () => onRemoveGroup(groupIndex)
         const ps = div.querySelector('[data-action="page-size"]')

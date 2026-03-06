@@ -9,7 +9,6 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 
-from core.account.pool import AccountPool
 from core.api.chat_handler import ChatHandler
 from core.config.repository import ConfigRepository
 from core.plugin.base import PluginRegistry
@@ -36,7 +35,9 @@ def create_config_router() -> APIRouter:
         return repo.load_raw()
 
     @router.put("/api/config")
-    def put_config(request: Request, config: list[dict[str, Any]]) -> dict[str, Any]:
+    async def put_config(
+        request: Request, config: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         """更新配置并立即生效。"""
         repo: ConfigRepository | None = getattr(request.app.state, "config_repo", None)
         if repo is None:
@@ -75,18 +76,10 @@ def create_config_router() -> APIRouter:
         # 立即生效：重新加载池并替换 chat_handler
         try:
             groups = repo.load_groups()
-            if groups:
-                new_pool = AccountPool.from_groups(groups)
-                session_cache = request.app.state.session_cache
-                browser_manager = request.app.state.browser_manager
-                request.app.state.chat_handler = ChatHandler(
-                    pool=new_pool,
-                    session_cache=session_cache,
-                    browser_manager=browser_manager,
-                    config_repo=repo,
-                )
-            else:
-                request.app.state.chat_handler = None
+            handler: ChatHandler | None = getattr(request.app.state, "chat_handler", None)
+            if handler is None:
+                raise RuntimeError("chat_handler 未初始化")
+            await handler.refresh_configuration(groups, config_repo=repo)
         except Exception as e:
             logger.exception("重载账号池失败")
             raise HTTPException(

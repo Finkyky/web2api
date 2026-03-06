@@ -1,7 +1,7 @@
 """
 Claude 插件：仅实现站点特有的 workspace 获取、会话创建、请求体构建、SSE 解析和限流处理。
 其余编排逻辑（create_page / apply_auth / stream_completion 流程）全部由 BaseSitePlugin 完成。
-调试时可通过环境变量 CLAUDE_START_URL、CLAUDE_API_BASE 指向 mock。
+调试时可在 config.yaml 的 claude.start_url、claude.api_base 指向 mock。
 """
 
 import datetime
@@ -126,6 +126,15 @@ def _parse_one_sse_event(payload: str) -> tuple[list[str], str | None, str | Non
     return (result, message_id, error_message)
 
 
+def _is_terminal_sse_event(payload: str) -> bool:
+    """Claude 正常流结束时会发送 message_stop。"""
+    try:
+        obj = json.loads(payload)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(obj, dict) and obj.get("type") == "message_stop"
+
+
 # ---------------------------------------------------------------------------
 # ClaudePlugin — 只需声明配置 + 实现 5 个 hook
 # ---------------------------------------------------------------------------
@@ -142,8 +151,7 @@ class ClaudePlugin(BaseSitePlugin):
         cookie_name="sessionKey",
         cookie_domain=".claude.ai",
         auth_keys=["sessionKey", "session_key"],
-        env_start_url="CLAUDE_START_URL",
-        env_api_base="CLAUDE_API_BASE",
+        config_section="claude",
     )
 
     def model_mapping(self) -> dict[str, str] | None:
@@ -208,6 +216,9 @@ class ClaudePlugin(BaseSitePlugin):
         payload: str,
     ) -> tuple[list[str], str | None, str | None]:
         return _parse_one_sse_event(payload)
+
+    def is_terminal_sse_event(self, payload: str) -> bool:
+        return _is_terminal_sse_event(payload)
 
     # ---- 可选 hook 覆盖 ----
 

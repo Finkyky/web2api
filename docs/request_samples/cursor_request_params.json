@@ -44,9 +44,7 @@
             "description": "Clear, concise description of what this command does in 5-10 words"
           }
         },
-        "required": [
-          "command"
-        ]
+        "required": ["command"]
       }
     },
     {
@@ -64,9 +62,7 @@
             "description": "The glob pattern to match files against.\nPatterns not starting with \"**/\" are automatically prepended with \"**/\" to enable recursive searching.\n\nExamples:\n\t- \"*.js\" (becomes \"**/*.js\") - find all .js files\n\t- \"**/node_modules/**\" - find all node_modules directories\n\t- \"**/test/**/test_*.ts\" - find all test_*.ts files in any test directory"
           }
         },
-        "required": [
-          "glob_pattern"
-        ]
+        "required": ["glob_pattern"]
       }
     },
     {
@@ -89,11 +85,7 @@
           },
           "output_mode": {
             "type": "string",
-            "enum": [
-              "content",
-              "files_with_matches",
-              "count"
-            ],
+            "enum": ["content", "files_with_matches", "count"],
             "description": "Output mode: \"content\" shows matching lines (supports -A/-B/-C context, -n line numbers, head_limit), \"files_with_matches\" shows file paths (supports head_limit), \"count\" shows match counts (supports head_limit). Defaults to \"content\"."
           },
           "-B": {
@@ -131,9 +123,7 @@
             "description": "Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall). Default: false."
           }
         },
-        "required": [
-          "pattern"
-        ]
+        "required": ["pattern"]
       }
     },
     {
@@ -155,9 +145,7 @@
             "description": "The number of lines to read. Only provide if the file is too large to read at once."
           }
         },
-        "required": [
-          "path"
-        ]
+        "required": ["path"]
       }
     },
     {
@@ -171,9 +159,7 @@
             "description": "The absolute path of the file to delete"
           }
         },
-        "required": [
-          "path"
-        ]
+        "required": ["path"]
       }
     },
     {
@@ -199,11 +185,7 @@
             "description": "Replace all occurrences of old_string (default false)"
           }
         },
-        "required": [
-          "path",
-          "old_string",
-          "new_string"
-        ]
+        "required": ["path", "old_string", "new_string"]
       }
     },
     {
@@ -221,10 +203,7 @@
             "description": "The contents to write to the file"
           }
         },
-        "required": [
-          "path",
-          "contents"
-        ]
+        "required": ["path", "contents"]
       }
     },
     {
@@ -289,20 +268,11 @@
                 },
                 "status": {
                   "type": "string",
-                  "enum": [
-                    "pending",
-                    "in_progress",
-                    "completed",
-                    "cancelled"
-                  ],
+                  "enum": ["pending", "in_progress", "completed", "cancelled"],
                   "description": "The current status of the TODO item"
                 }
               },
-              "required": [
-                "id",
-                "content",
-                "status"
-              ]
+              "required": ["id", "content", "status"]
             },
             "minItems": 2,
             "description": "Array of TODO items to update or create"
@@ -312,10 +282,7 @@
             "description": "Whether to merge the todos with the existing todos. If true, the todos will be merged into the existing todos based on the id field. You can leave unchanged properties undefined. If false, the new todos will replace the existing todos."
           }
         },
-        "required": [
-          "todos",
-          "merge"
-        ]
+        "required": ["todos", "merge"]
       }
     },
     {
@@ -358,10 +325,7 @@
             "description": "The number of results to return. Defaults to 15. Do not specify a value larger than 15."
           }
         },
-        "required": [
-          "query",
-          "target_directories"
-        ]
+        "required": ["query", "target_directories"]
       }
     },
     {
@@ -379,9 +343,7 @@
             "description": "One sentence explanation as to why this tool is being used, and how it contributes to the goal."
           }
         },
-        "required": [
-          "search_term"
-        ]
+        "required": ["search_term"]
       }
     },
     {
@@ -395,9 +357,7 @@
             "description": "The URL to fetch. The content will be converted to a readable markdown format."
           }
         },
-        "required": [
-          "url"
-        ]
+        "required": ["url"]
       }
     },
     {
@@ -422,9 +382,7 @@
             "description": "Optional array of file paths to reference images as additional inputs."
           }
         },
-        "required": [
-          "description"
-        ]
+        "required": ["description"]
       }
     },
     {
@@ -464,10 +422,7 @@
                         "description": "Display text for this option"
                       }
                     },
-                    "required": [
-                      "id",
-                      "label"
-                    ]
+                    "required": ["id", "label"]
                   },
                   "minItems": 2,
                   "description": "Array of answer options (minimum 2 required)"
@@ -477,19 +432,13 @@
                   "description": "If true, user can select multiple options. Defaults to false."
                 }
               },
-              "required": [
-                "id",
-                "prompt",
-                "options"
-              ]
+              "required": ["id", "prompt", "options"]
             },
             "minItems": 1,
             "description": "Array of questions to present to the user (minimum 1 required)"
           }
         },
-        "required": [
-          "questions"
-        ]
+        "required": ["questions"]
       }
     },
     {
@@ -508,9 +457,7 @@
           },
           "model": {
             "type": "string",
-            "enum": [
-              "fast"
-            ],
+            "enum": ["fast"],
             "description": "Optional model to use for this agent. If not specified, inherits from parent. Prefer fast for quick, straightforward tasks to minimize cost and latency. Only select a different model when the task specifically benefits from it (e.g., deep reasoning, high-quality code review, multimodal input)"
           },
           "resume": {
@@ -523,11 +470,7 @@
           },
           "subagent_type": {
             "type": "string",
-            "enum": [
-              "generalPurpose",
-              "explore",
-              "browser-use"
-            ],
+            "enum": ["generalPurpose", "explore", "browser-use"],
             "description": "Subagent type to use for this task. Must be one of: generalPurpose, explore, browser-use."
           },
           "attachments": {
@@ -538,10 +481,7 @@
             "description": "Optional array of file paths to images or videos to pass to the subagent. Files are read and attached to the subagent's context. Supports image formats (png, jpg, gif, webp) and video formats (mp4, webm) for Gemini models."
           }
         },
-        "required": [
-          "description",
-          "prompt"
-        ]
+        "required": ["description", "prompt"]
       }
     },
     {
@@ -559,10 +499,7 @@
             "description": "Library name to search for and retrieve a Context7-compatible library ID."
           }
         },
-        "required": [
-          "query",
-          "libraryName"
-        ],
+        "required": ["query", "libraryName"],
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
     },
@@ -581,10 +518,7 @@
             "description": "The question or task you need help with. Be specific and include relevant details. Good: 'How to set up authentication with JWT in Express.js' or 'React useEffect cleanup function examples'. Bad: 'auth' or 'hooks'. IMPORTANT: Do not include any sensitive or confidential information such as API keys, passwords, credentials, or personal data in your query."
           }
         },
-        "required": [
-          "libraryId",
-          "query"
-        ],
+        "required": ["libraryId", "query"],
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
     },
@@ -619,9 +553,7 @@
             "description": "每页数量（可选，默认20条）"
           }
         },
-        "required": [
-          "projectId"
-        ],
+        "required": ["projectId"],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
@@ -637,9 +569,7 @@
             "description": "接口ID"
           }
         },
-        "required": [
-          "interfaceId"
-        ],
+        "required": ["interfaceId"],
         "additionalProperties": false,
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
@@ -670,9 +600,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "query"
-        ],
+        "required": ["query"],
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
     },
@@ -695,9 +623,7 @@
             "type": "number"
           }
         },
-        "required": [
-          "icon_id"
-        ],
+        "required": ["icon_id"],
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
     },
@@ -733,11 +659,7 @@
             "default": "any",
             "description": "Preferred style",
             "type": "string",
-            "enum": [
-              "solid",
-              "outline",
-              "any"
-            ]
+            "enum": ["solid", "outline", "any"]
           },
           "limit": {
             "default": 10,
@@ -747,9 +669,7 @@
             "maximum": 20
           }
         },
-        "required": [
-          "use_case"
-        ],
+        "required": ["use_case"],
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
     },
@@ -787,9 +707,7 @@
             "maximum": 50
           }
         },
-        "required": [
-          "icon_id"
-        ],
+        "required": ["icon_id"],
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
     },
@@ -817,9 +735,7 @@
             "type": "number"
           }
         },
-        "required": [
-          "icon_ids"
-        ],
+        "required": ["icon_ids"],
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
     },
@@ -851,9 +767,7 @@
             "description": "Absolute path to the icons file (e.g., '/Users/me/myapp/src/components/icons.tsx')"
           }
         },
-        "required": [
-          "icons_file"
-        ],
+        "required": ["icons_file"],
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
     },
@@ -869,13 +783,7 @@
           },
           "framework": {
             "type": "string",
-            "enum": [
-              "react",
-              "vue",
-              "svelte",
-              "solid",
-              "svg"
-            ],
+            "enum": ["react", "vue", "svelte", "solid", "svg"],
             "description": "Framework for icon components"
           },
           "icon_id": {
@@ -895,11 +803,7 @@
             "type": "number"
           }
         },
-        "required": [
-          "icons_file",
-          "framework",
-          "icon_id"
-        ],
+        "required": ["icons_file", "framework", "icon_id"],
         "$schema": "http://json-schema.org/draft-07/schema#"
       }
     },
@@ -914,9 +818,7 @@
             "description": "The URL to navigate to"
           }
         },
-        "required": [
-          "url"
-        ],
+        "required": ["url"],
         "additionalProperties": false
       }
     },
@@ -943,10 +845,7 @@
             "description": "Height of the browser window"
           }
         },
-        "required": [
-          "width",
-          "height"
-        ],
+        "required": ["width", "height"],
         "additionalProperties": false
       }
     },
@@ -991,9 +890,7 @@
             "description": "Name of the key to press or a character to generate, such as `ArrowLeft` or `a`"
           }
         },
-        "required": [
-          "key"
-        ],
+        "required": ["key"],
         "additionalProperties": false
       }
     },
@@ -1033,32 +930,19 @@
           },
           "button": {
             "type": "string",
-            "enum": [
-              "left",
-              "right",
-              "middle"
-            ],
+            "enum": ["left", "right", "middle"],
             "description": "Button to click, defaults to left"
           },
           "modifiers": {
             "type": "array",
             "items": {
               "type": "string",
-              "enum": [
-                "Alt",
-                "Control",
-                "ControlOrMeta",
-                "Meta",
-                "Shift"
-              ]
+              "enum": ["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]
             },
             "description": "Modifier keys to press"
           }
         },
-        "required": [
-          "element",
-          "ref"
-        ],
+        "required": ["element", "ref"],
         "additionalProperties": false
       }
     },
@@ -1077,10 +961,7 @@
             "description": "Exact target element reference from the page snapshot"
           }
         },
-        "required": [
-          "element",
-          "ref"
-        ],
+        "required": ["element", "ref"],
         "additionalProperties": false
       }
     },
@@ -1111,11 +992,7 @@
             "description": "Whether to type one character at a time. Useful for triggering key handlers in the page. By default entire text is filled in at once."
           }
         },
-        "required": [
-          "element",
-          "ref",
-          "text"
-        ],
+        "required": ["element", "ref", "text"],
         "additionalProperties": false
       }
     },
@@ -1141,11 +1018,7 @@
             "description": "Array of values to select in the dropdown. This can be a single value or multiple values."
           }
         },
-        "required": [
-          "element",
-          "ref",
-          "values"
-        ],
+        "required": ["element", "ref", "values"],
         "additionalProperties": false
       }
     },
@@ -1172,12 +1045,7 @@
             "description": "Exact target element reference from the page snapshot"
           }
         },
-        "required": [
-          "startElement",
-          "startRef",
-          "endElement",
-          "endRef"
-        ],
+        "required": ["startElement", "startRef", "endElement", "endRef"],
         "additionalProperties": false
       }
     },
@@ -1200,9 +1068,7 @@
             "description": "CSS selector to find element, if evaluating on an element"
           }
         },
-        "required": [
-          "function"
-        ],
+        "required": ["function"],
         "additionalProperties": false
       }
     },
@@ -1227,13 +1093,7 @@
                 },
                 "type": {
                   "type": "string",
-                  "enum": [
-                    "textbox",
-                    "checkbox",
-                    "radio",
-                    "combobox",
-                    "slider"
-                  ],
+                  "enum": ["textbox", "checkbox", "radio", "combobox", "slider"],
                   "description": "Type of the field"
                 },
                 "value": {
@@ -1241,20 +1101,13 @@
                   "description": "Value to fill in the field. If the field is a checkbox, the value should be `true` or `false`. If the field is a combobox, the value should be the text of the option."
                 }
               },
-              "required": [
-                "name",
-                "ref",
-                "type",
-                "value"
-              ],
+              "required": ["name", "ref", "type", "value"],
               "additionalProperties": false
             },
             "description": "Fields to fill in"
           }
         },
-        "required": [
-          "fields"
-        ],
+        "required": ["fields"],
         "additionalProperties": false
       }
     },
@@ -1273,9 +1126,7 @@
             "description": "The text of the prompt in case of a prompt dialog."
           }
         },
-        "required": [
-          "accept"
-        ],
+        "required": ["accept"],
         "additionalProperties": false
       }
     },
@@ -1287,10 +1138,7 @@
         "properties": {
           "type": {
             "type": "string",
-            "enum": [
-              "png",
-              "jpeg"
-            ],
+            "enum": ["png", "jpeg"],
             "default": "png",
             "description": "Image format for the screenshot. Default is png."
           },
@@ -1322,12 +1170,7 @@
         "properties": {
           "action": {
             "type": "string",
-            "enum": [
-              "list",
-              "new",
-              "close",
-              "select"
-            ],
+            "enum": ["list", "new", "close", "select"],
             "description": "Operation to perform"
           },
           "index": {
@@ -1335,9 +1178,7 @@
             "description": "Tab index, used for close/select. If omitted for close, current tab is closed."
           }
         },
-        "required": [
-          "action"
-        ],
+        "required": ["action"],
         "additionalProperties": false
       }
     },
@@ -1374,10 +1215,7 @@
             "description": "Optional relative path in the workspace to save the resource to. When set, the resource is written to disk and is not returned to the model."
           }
         },
-        "required": [
-          "server",
-          "uri"
-        ]
+        "required": ["server", "uri"]
       }
     },
     {
@@ -1395,9 +1233,7 @@
             "description": "Optional explanation for why the mode switch is requested. This helps the user understand why you're switching modes."
           }
         },
-        "required": [
-          "target_mode_id"
-        ]
+        "required": ["target_mode_id"]
       }
     }
   ],
