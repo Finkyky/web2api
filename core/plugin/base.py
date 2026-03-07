@@ -203,13 +203,13 @@ class BaseSitePlugin(AbstractPlugin):
         page: Page,
         **kwargs: Any,
     ) -> str | None:
-        workspace = await self.fetch_workspace(context)
+        workspace = await self.fetch_workspace(context, page)
         if workspace is None:
             logger.warning(
                 "[%s] fetch_workspace 返回 None，请确认已登录", self.type_name
             )
             return None
-        conv_id = await self.create_session(context, workspace)
+        conv_id = await self.create_session(context, page, workspace)
         if conv_id is None:
             return None
         state: dict[str, Any] = {"workspace": workspace}
@@ -271,7 +271,9 @@ class BaseSitePlugin(AbstractPlugin):
     # ---- 子类必须实现的 hook ----
 
     @abstractmethod
-    async def fetch_workspace(self, context: BrowserContext) -> dict[str, Any] | None:
+    async def fetch_workspace(
+        self, context: BrowserContext, page: Page
+    ) -> dict[str, Any] | None:
         """获取 workspace / org 信息（如 org_uuid），失败返回 None。"""
         ...
 
@@ -279,6 +281,7 @@ class BaseSitePlugin(AbstractPlugin):
     async def create_session(
         self,
         context: BrowserContext,
+        page: Page,
         workspace: dict[str, Any],
     ) -> str | None:
         """调用站点 API 创建会话，返回会话 ID，失败返回 None。"""

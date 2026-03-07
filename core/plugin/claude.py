@@ -10,10 +10,11 @@ import logging
 import time
 from typing import Any
 
-from playwright.async_api import BrowserContext
+from playwright.async_api import BrowserContext, Page
 
 from core.constants import TIMEZONE
 from core.plugin.base import BaseSitePlugin, PluginRegistry, SiteConfig
+from core.plugin.helpers import request_json_via_page_fetch
 
 logger = logging.getLogger(__name__)
 
@@ -157,13 +158,29 @@ class ClaudePlugin(BaseSitePlugin):
 
     # ---- 5 个必须实现的 hook ----
     # 获取 workspace / org 信息
-    async def fetch_workspace(self, context: BrowserContext) -> dict[str, Any] | None:
-        resp = await context.request.get(f"{self.api_base}/account", timeout=15000)
-        if resp.status != 200:
-            await resp.dispose()
+    async def fetch_workspace(
+        self, context: BrowserContext, page: Page
+    ) -> dict[str, Any] | None:
+        del context
+        resp = await request_json_via_page_fetch(
+            page,
+            f"{self.api_base}/account",
+            timeout_ms=15000,
+        )
+        if int(resp.get("status") or 0) != 200:
+            text = str(resp.get("text") or "")[:500]
+            logger.warning(
+                "[%s] fetch_workspace 失败 status=%s url=%s body=%s",
+                self.type_name,
+                resp.get("status"),
+                resp.get("url"),
+                text,
+            )
             return None
-        data = await resp.json()
-        await resp.dispose()
+        data = resp.get("json")
+        if not isinstance(data, dict):
+            logger.warning("[%s] fetch_workspace 返回非 JSON", self.type_name)
+            return None
         memberships = data.get("memberships") or []
         if not memberships:
             return None
@@ -174,23 +191,29 @@ class ClaudePlugin(BaseSitePlugin):
     async def create_session(
         self,
         context: BrowserContext,
+        page: Page,
         workspace: dict[str, Any],
     ) -> str | None:
+        del context
         org_uuid = workspace["org_uuid"]
         url = f"{self.api_base}/organizations/{org_uuid}/chat_conversations"
-        resp = await context.request.post(
+        resp = await request_json_via_page_fetch(
+            page,
             url,
-            data=json.dumps({"name": "", "model": "claude-sonnet-4-5-20250929"}),
+            method="POST",
+            body=json.dumps({"name": "", "model": "claude-sonnet-4-5-20250929"}),
             headers={"Content-Type": "application/json"},
-            timeout=15000,
+            timeout_ms=15000,
         )
-        if resp.status not in (200, 201):
-            text = (await resp.text())[:500]
-            await resp.dispose()
-            logger.warning("创建会话失败 %s: %s", resp.status, text)
+        status = int(resp.get("status") or 0)
+        if status not in (200, 201):
+            text = str(resp.get("text") or "")[:500]
+            logger.warning("创建会话失败 %s: %s", status, text)
             return None
-        data = await resp.json()
-        await resp.dispose()
+        data = resp.get("json")
+        if not isinstance(data, dict):
+            logger.warning("创建会话返回非 JSON")
+            return None
         return data.get("uuid")
 
     def build_completion_url(self, session_id: str, state: dict[str, Any]) -> str:
