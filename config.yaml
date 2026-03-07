@@ -2,7 +2,7 @@ server:
   # 监听地址
   # 本机开发建议 127.0.0.1；Docker/容器内建议 0.0.0.0
   host: '127.0.0.1'
-  port: 9001
+  port: 9000
 
 browser:
   # 指纹浏览器（fingerprint-chromium）可执行文件路径

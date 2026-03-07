@@ -657,6 +657,7 @@ class ChatHandler:
                 if not content.strip():
                     raise ValueError("messages 中需至少有一条带 content 的 user 消息")
 
+                debug_path.parent.mkdir(parents=True, exist_ok=True)
                 debug_path.write_text(
                     json.dumps(
                         {

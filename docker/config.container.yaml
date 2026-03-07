@@ -18,7 +18,7 @@ browser:
   # 某些容器环境里 GPU sandbox 也可能导致额外问题
   disable_gpu_sandbox: true
 
-  cdp_port_start: 9223
+  cdp_port_start: 9222
   cdp_port_count: 20
 
 scheduler:

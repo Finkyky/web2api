@@ -43,7 +43,7 @@ POST /claude/v1/chat/completions
 
 如果你只是想“体验 Claude 网页”，这个项目不适合你；它更像一个给开发者用的桥接服务。
 
-## 新手先记住这 4 个概念
+## 4 个概念
 
 - `代理组`
   一组代理配置，对应一个浏览器进程。
@@ -78,8 +78,6 @@ docker run -d \
   -v "$(pwd)/docker-data:/data" \
   ghcr.io/caiwuu/web2api:latest
 ```
-
-仓库推送到 `main` 或打 `v*` tag 后，GitHub Actions 会自动把镜像发布到 `GHCR`。
 
 如果你是在 `Apple Silicon` 的 Mac 上运行 Docker，也建议显式使用 `linux/amd64`，因为当前内置的 `fingerprint-chromium` 是 `x86_64 Linux` 版本。
 
@@ -144,8 +142,8 @@ INFO:     Uvicorn running on http://0.0.0.0:9000
 - Python `3.12+`
 - [`uv`](https://github.com/astral-sh/uv)
 - 指纹浏览器 [fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium)
-- 一个可用代理
-- 一个可用的 Claude `sessionKey`
+- 可用代理
+- 可用的 Claude `sessionKey`
 
 ### 2. 安装依赖
 
@@ -167,7 +165,7 @@ sudo apt install -y xvfb
 启动时这样跑：
 
 ```bash
-xvfb-run -a -s "-screen 0 1920x1080x24" ./start.sh
+xvfb-run -a -s "-screen 0 1920x1080x24" uv python run main.py
 ```
 
 这样做比直接改成 `headless` 更稳，原因是：
@@ -223,7 +221,7 @@ server:
 ### 4. 启动服务
 
 ```bash
-./start.sh
+uv python run main.py
 ```
 
 如果启动成功，你会看到类似日志：
@@ -271,54 +269,6 @@ curl -s "http://127.0.0.1:9000/claude/v1/chat/completions" \
     ]
   }'
 ```
-
-## 最常见的两个“看起来像问题，其实是正常现象”
-
-### 1. 为什么日志里会看到 `create_conversation`？
-
-这是正常的。
-
-项目会优先复用旧会话；但如果是下面这些情况，就会新建一个远端会话：
-
-- 这是第一次聊天
-- 服务刚刚重启
-- 本地缓存已经失效
-- 旧会话对应的 tab/账号不可用了
-
-新建会话之后，项目会把你已有的聊天历史重新发给 Claude，所以你在网页上看到“新会话里带着旧记录”，这通常就是预期行为。
-
-### 2. 为什么日志里 `POST ... 200 OK` 会先出来？
-
-这对流式接口是正常的。
-
-因为服务先把 HTTP 响应头发给客户端，然后才一边和 Claude 网页通信、一边流式吐内容。
-
-## 配置到底存在哪里
-
-这里很多新人会搞混。
-
-### `config.yaml`
-
-这是“运行参数”，例如：
-
-- 端口
-- 浏览器路径
-- 调度并发
-- 回收周期
-
-### `db.sqlite3`
-
-这是“业务配置”，例如：
-
-- 代理组
-- 账号
-- auth
-- 账号冻结时间
-
-也就是说：
-
-- `config.yaml` 管程序怎么跑
-- `db.sqlite3` 管你有哪些代理和账号
 
 ## 如果你写的是自己的客户端，请注意
 

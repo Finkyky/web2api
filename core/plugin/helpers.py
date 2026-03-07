@@ -66,6 +66,40 @@ async ({ url, body, bindingName }) => {
 """
 
 
+PAGE_FETCH_JSON_JS = """
+async ({ url, method, body, headers, timeoutMs }) => {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs || 15000);
+  try {
+    const resp = await fetch(url, {
+      method: method || "GET",
+      body: body ?? undefined,
+      headers: headers || {},
+      credentials: "include",
+      signal: ctrl.signal
+    });
+    clearTimeout(t);
+    const text = await resp.text();
+    const headersObj = {};
+    resp.headers.forEach((v, k) => { headersObj[k] = v; });
+    return {
+      ok: resp.ok,
+      status: resp.status,
+      statusText: resp.statusText,
+      url: resp.url,
+      redirected: resp.redirected,
+      headers: headersObj,
+      text,
+    };
+  } catch (e) {
+    clearTimeout(t);
+    const msg = e.name === "AbortError" ? `请求超时(${Math.floor((timeoutMs || 15000) / 1000)}s)` : (e.message || String(e));
+    return { error: msg };
+  }
+}
+"""
+
+
 async def ensure_page_for_site(
     context: BrowserContext,
     url_contains: str,
@@ -156,6 +190,51 @@ async def apply_cookie_auth(
                 )
             else:
                 raise
+
+
+async def request_json_via_page_fetch(
+    page: Page,
+    url: str,
+    *,
+    method: str = "GET",
+    body: str | None = None,
+    headers: dict[str, str] | None = None,
+    timeout_ms: int = 15000,
+) -> dict[str, Any]:
+    """
+    在页面内发起非流式 fetch，请求结果按 JSON 优先解析返回。
+    这样能复用浏览器真实网络栈、cookie 与代理扩展能力。
+    """
+    logger.info(
+        "[fetch] page request method=%s url=%s page.url=%s",
+        method,
+        url[:120] + "..." if len(url) > 120 else url,
+        page.url or "",
+    )
+    result = await page.evaluate(
+        PAGE_FETCH_JSON_JS,
+        {
+            "url": url,
+            "method": method,
+            "body": body,
+            "headers": headers or {},
+            "timeoutMs": timeout_ms,
+        },
+    )
+    if not isinstance(result, dict):
+        raise RuntimeError("页面 fetch 返回结果异常")
+    error = result.get("error")
+    if error:
+        raise RuntimeError(str(error))
+    text = result.get("text")
+    if isinstance(text, str) and text:
+        try:
+            result["json"] = json.loads(text)
+        except json.JSONDecodeError:
+            result["json"] = None
+    else:
+        result["json"] = None
+    return result
 
 
 async def stream_raw_via_page_fetch(
