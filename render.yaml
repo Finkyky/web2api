@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: web2api
+    runtime: docker
+    plan: free
+
+    # Docker 配置
+    dockerfilePath: ./Dockerfile
+
+    # 环境变量
+    envVars:
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: WEB2API_DATA_DIR
+        value: /data
+      - key: HOME
+        value: /data
+
+    # 健康检查
+    healthCheckPath: /
+
+    # 持久化存储（免费计划：0.5GB）
+    disks:
+      - name: data
+        mountPath: /data
+        sizeGB: 0.5
+
+    # 自动部署
+    autoDeploy: true
+
+    # 构建配置
+    buildCommand: ""  # 使用 Dockerfile 构建
+    startCommand: ""  # 使用 Dockerfile 的 ENTRYPOINT
