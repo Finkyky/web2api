@@ -19,12 +19,6 @@ services:
     # 健康检查
     healthCheckPath: /
 
-    # 持久化存储（免费计划：0.5GB）
-    disks:
-      - name: data
-        mountPath: /data
-        sizeGB: 0.5
-
     # 自动部署
     autoDeploy: true
 
